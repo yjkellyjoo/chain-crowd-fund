@@ -28,10 +28,6 @@ const selfBackendVerifier = new SelfBackendVerifier(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    console.log('=== Self Protocol API Request ===');
-    console.log('Full request body:', JSON.stringify(body, null, 2));
-    console.log('Body keys:', Object.keys(body));
-    
     const { attestationId, proof, publicSignals, userContextData } = body;
     if (!proof || !publicSignals || !attestationId || !userContextData) {
       return NextResponse.json(

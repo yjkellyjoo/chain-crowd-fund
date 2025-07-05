@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "update-abi": "cd ../contract && forge inspect ChainCrowdFund abi --json > ../frontend/src/app/lib/ChainCrowdFund.abi.json"
   },
   "dependencies": {
     "@privy-io/react-auth": "^2.17.3",

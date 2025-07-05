@@ -2,75 +2,61 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthAndVerification } from "../hooks/useAuthAndVerification";
-
-// Mock campaign data - in real app, this would come from your backend
-const mockCampaigns = [
-  {
-    id: 1,
-    title: "Clean Water Initiative",
-    description: "Providing clean water access to rural communities",
-    goal: 50000,
-    raised: 32000,
-    creator: "0x1234...5678",
-    image: "/api/placeholder/400/300",
-    deadline: "2024-03-15",
-    category: "Environment"
-  },
-  {
-    id: 2,
-    title: "Educational Technology Hub",
-    description: "Building a tech education center for underprivileged youth",
-    goal: 75000,
-    raised: 45000,
-    creator: "0x8765...4321",
-    image: "/api/placeholder/400/300",
-    deadline: "2024-02-28",
-    category: "Education"
-  },
-  {
-    id: 3,
-    title: "Solar Power Project",
-    description: "Installing solar panels for sustainable energy solutions",
-    goal: 100000,
-    raised: 78000,
-    creator: "0xabcd...efgh",
-    image: "/api/placeholder/400/300",
-    deadline: "2024-04-10",
-    category: "Energy"
-  }
-];
+import { useContract } from "../hooks/useContract";
+import ContributeCampaign from "../components/ContributeCampaign";
+import { Campaign } from "../lib/contract";
 
 export default function CampaignsPage() {
   const router = useRouter();
   const { isReady, isAuthenticated, isVerified, isLoading } = useAuthAndVerification(true);
-  const [campaigns] = useState(mockCampaigns);
-  const [campaignLoading, setCampaignLoading] = useState(true);
+  const { 
+    campaigns, 
+    isLoading: contractLoading, 
+    error: contractError, 
+    formatUSDC,
+    formatDeadline,
+    isExpired,
+    getProgressPercentage,
+    network
+  } = useContract();
+  
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
+  const [showContributeModal, setShowContributeModal] = useState(false);
 
-  // Simulate campaign loading
+  // Check if user is on correct network
   React.useEffect(() => {
-    if (isReady && isAuthenticated && isVerified) {
-      console.log('✅ All checks passed, loading campaigns');
-      setTimeout(() => {
-        console.log('✅ Campaigns loaded');
-        setCampaignLoading(false);
-      }, 1000);
+    if (contractError?.includes('network')) {
+      setNetworkError(contractError);
     }
-  }, [isReady, isAuthenticated, isVerified]);
+  }, [contractError]);
 
   const handleCampaignClick = (campaignId: number) => {
     router.push(`/campaigns/${campaignId}`);
   };
 
-  const getProgressPercentage = (raised: number, goal: number) => {
-    return Math.min((raised / goal) * 100, 100);
+  const handleContributeClick = (campaign: Campaign, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent navigation to campaign details
+    setSelectedCampaign(campaign);
+    setShowContributeModal(true);
   };
 
-  if (!isReady || isLoading || campaignLoading) {
+  const handleContributeSuccess = () => {
+    // Campaign data will be automatically refreshed by the hook
+    setShowContributeModal(false);
+    setSelectedCampaign(null);
+  };
+
+  const shortenAddress = (address: string) => {
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  };
+
+  if (!isReady || isLoading || contractLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-          <p>{!isReady ? 'Initializing...' : 'Loading campaigns...'}</p>
+          <p>{!isReady ? 'Initializing...' : contractLoading ? 'Loading campaigns...' : 'Loading...'}</p>
         </div>
       </div>
     );
@@ -79,6 +65,43 @@ export default function CampaignsPage() {
   // If not authenticated or verified, the hook will handle redirects
   if (!isAuthenticated || !isVerified) {
     return null;
+  }
+
+  // Show network error if present
+  if (networkError) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-4">Network Error</h2>
+          <p className="text-red-400 mb-4">{networkError}</p>
+          <p className="text-gray-400 mb-4">Please switch to {network.name} to continue.</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show contract error if present
+  if (contractError && !networkError) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-4">Contract Error</h2>
+          <p className="text-red-400 mb-4">{contractError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -128,13 +151,13 @@ export default function CampaignsPage() {
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-400">Progress</span>
                     <span className="text-white">
-                      {getProgressPercentage(campaign.raised, campaign.goal).toFixed(1)}%
+                      {getProgressPercentage(campaign.raisedAmount, campaign.goalAmount).toFixed(1)}%
                     </span>
                   </div>
                   <div className="w-full bg-gray-700 rounded-full h-2">
                     <div
                       className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${getProgressPercentage(campaign.raised, campaign.goal)}%` }}
+                      style={{ width: `${getProgressPercentage(campaign.raisedAmount, campaign.goalAmount)}%` }}
                     ></div>
                   </div>
                 </div>
@@ -144,26 +167,39 @@ export default function CampaignsPage() {
                   <div>
                     <span className="text-gray-400">Raised: </span>
                     <span className="text-white font-semibold">
-                      ${campaign.raised.toLocaleString()} USDC
+                      {formatUSDC(campaign.raisedAmount)} USDC
                     </span>
                   </div>
                   <div>
                     <span className="text-gray-400">Goal: </span>
                     <span className="text-white font-semibold">
-                      ${campaign.goal.toLocaleString()} USDC
+                      {formatUSDC(campaign.goalAmount)} USDC
                     </span>
                   </div>
                 </div>
 
                 {/* Deadline */}
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-400">
-                    Deadline: {new Date(campaign.deadline).toLocaleDateString()}
+                  <span className={`text-gray-400 ${isExpired(campaign.deadline) ? 'text-red-400' : ''}`}>
+                    Deadline: {formatDeadline(campaign.deadline)}
+                    {isExpired(campaign.deadline) && ' (Expired)'}
                   </span>
                   <span className="text-gray-400">
-                    By: {campaign.creator}
+                    By: {shortenAddress(campaign.creator)}
                   </span>
                 </div>
+
+                {/* Contribute Button */}
+                {!campaign.isCompleted && !isExpired(campaign.deadline) && (
+                  <div className="mt-4 pt-3 border-t border-gray-600">
+                    <button
+                      onClick={(e) => handleContributeClick(campaign, e)}
+                      className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors font-semibold"
+                    >
+                      Fund This Campaign
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -177,6 +213,18 @@ export default function CampaignsPage() {
           </div>
         )}
       </div>
+
+      {/* Contribute Modal */}
+      {showContributeModal && selectedCampaign && (
+        <ContributeCampaign
+          campaign={selectedCampaign}
+          onClose={() => {
+            setShowContributeModal(false);
+            setSelectedCampaign(null);
+          }}
+          onSuccess={handleContributeSuccess}
+        />
+      )}
     </div>
   );
 } 

@@ -17,7 +17,7 @@ const mockCampaigns = [
     creator: "0x1234...5678",
     creatorName: "WaterCorp Foundation",
     image: "/api/placeholder/600/400",
-    deadline: "2024-03-15",
+    deadline: "2026-03-15",
     category: "Environment",
     backers: 127,
     updates: [

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useUser, User } from '@privy-io/react-auth';
+import { usePrivy, useUser, User, useWallets } from '@privy-io/react-auth';
 
 interface AuthState {
   isReady: boolean;
@@ -15,6 +15,7 @@ export function useAuthAndVerification(redirectOnFail: boolean = true): AuthStat
   const router = useRouter();
   const { ready, authenticated } = usePrivy();
   const { user } = useUser();
+  const { wallets } = useWallets();
   const [isVerified, setIsVerified] = useState(false);
   const [isLoadingVerification, setIsLoadingVerification] = useState(true);
 
@@ -44,7 +45,8 @@ export function useAuthAndVerification(redirectOnFail: boolean = true): AuthStat
 
     // Check Self verification
     if (user) {
-      const verificationKey = `verified_${user?.wallet?.address || user?.email?.address}`;
+      const userIdentifier = wallets[0]?.address || user?.email?.address;
+      const verificationKey = `verified_${userIdentifier}`;
       console.log('verificationKey:', verificationKey);
       const stored = localStorage.getItem(verificationKey);
       console.log('stored verification:', stored);
@@ -69,7 +71,7 @@ export function useAuthAndVerification(redirectOnFail: boolean = true): AuthStat
     
     setIsLoadingVerification(false);
     console.log('✅ Auth check completed');
-  }, [ready, authenticated, user, router, redirectOnFail]);
+  }, [ready, authenticated, user, wallets, router, redirectOnFail]);
 
   return {
     isReady: ready,
@@ -81,24 +83,26 @@ export function useAuthAndVerification(redirectOnFail: boolean = true): AuthStat
 }
 
 // Helper function for handling verification success
-export function handleVerificationSuccess(user: User | null, userIdentifier: string) {
+export function handleVerificationSuccess(user: User | null, userIdentifier: string, walletAddress?: string) {
   console.log('=== Verification Success ===');
   console.log('userIdentifier:', userIdentifier);
-  console.log('user?.wallet?.address:', user?.wallet?.address);
+  console.log('walletAddress:', walletAddress);
   console.log('user?.email?.address:', user?.email?.address);
   
-  const verificationKey = `verified_${user?.wallet?.address || user?.email?.address}`;
+  const userKey = walletAddress || user?.email?.address;
+  const verificationKey = `verified_${userKey}`;
   console.log('Setting verification key:', verificationKey);
   localStorage.setItem(verificationKey, 'true');
-  localStorage.setItem(`verification_id_${user?.wallet?.address || user?.email?.address}`, userIdentifier);
+  localStorage.setItem(`verification_id_${userKey}`, userIdentifier);
   console.log('✅ Verification data saved to localStorage');
 }
 
 // Helper function for handling logout
-export function handleLogout(user: User | null, logout: () => void) {
+export function handleLogout(user: User | null, logout: () => void, walletAddress?: string) {
   console.log('=== Logout ===');
-  const verificationKey = `verified_${user?.wallet?.address || user?.email?.address}`;
-  const verificationIdKey = `verification_id_${user?.wallet?.address || user?.email?.address}`;
+  const userKey = walletAddress || user?.email?.address;
+  const verificationKey = `verified_${userKey}`;
+  const verificationIdKey = `verification_id_${userKey}`;
   localStorage.removeItem(verificationKey);
   localStorage.removeItem(verificationIdKey);
   console.log('✅ Verification data cleared from localStorage');
