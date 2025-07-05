@@ -1,49 +1,37 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import { usePrivy, useLogin, useLogout, useUser } from "@privy-io/react-auth";
+import React, { useState } from "react";
+import { useLogin, useLogout } from "@privy-io/react-auth";
 import SelfVerification from "./components/SelfVerification";
+import { useAuthAndVerification, handleVerificationSuccess, handleLogout } from "./hooks/useAuthAndVerification";
 
 export default function Home() {
-  const { ready, authenticated } = usePrivy();
   const { login } = useLogin();
   const { logout } = useLogout();
-  const { user } = useUser();
-  const [isVerified, setIsVerified] = useState(false);
-  const [isLoadingVerification, setIsLoadingVerification] = useState(true);
-
-  // Check verification status from localStorage on mount
-  useEffect(() => {
-    if (authenticated) {
-      const verificationKey = `verified_${user?.wallet?.address || user?.email?.address}`;
-      const stored = localStorage.getItem(verificationKey);
-      setIsVerified(stored === 'true');
-    }
-    setIsLoadingVerification(false);
-  }, [authenticated, user]);
+  const { isReady, isAuthenticated, isVerified, isLoading, user } = useAuthAndVerification(false);
+  const [localIsVerified, setLocalIsVerified] = useState(false);
 
   // Handle successful verification
-  const handleVerificationSuccess = (userIdentifier: string) => {
-    const verificationKey = `verified_${user?.wallet?.address || user?.email?.address}`;
-    localStorage.setItem(verificationKey, 'true');
-    localStorage.setItem(`verification_id_${user?.wallet?.address || user?.email?.address}`, userIdentifier);
-    setIsVerified(true);
+  const handleVerificationComplete = (userIdentifier: string) => {
+    handleVerificationSuccess(user, userIdentifier);
+    setLocalIsVerified(true);
   };
 
-  // Handle logout - clear verification status
-  const handleLogout = () => {
-    const verificationKey = `verified_${user?.wallet?.address || user?.email?.address}`;
-    const verificationIdKey = `verification_id_${user?.wallet?.address || user?.email?.address}`;
-    localStorage.removeItem(verificationKey);
-    localStorage.removeItem(verificationIdKey);
-    setIsVerified(false);
-    logout();
+  // Handle logout - clear verification status  
+  const handleLogoutClick = () => {
+    handleLogout(user, logout);
+    setLocalIsVerified(false);
   };
 
-  if (!ready || isLoadingVerification) {
+  // Update local state when hook verification changes
+  React.useEffect(() => {
+    setLocalIsVerified(isVerified);
+  }, [isVerified]);
+
+  if (!isReady || isLoading) {
     return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
   }
 
-  if (!authenticated) {
+  if (!isAuthenticated) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen gap-4">
         <h1 className="text-3xl font-bold">Welcome to ChainCrowdFund</h1>
@@ -59,7 +47,7 @@ export default function Home() {
   }
 
   // Show verification screen if authenticated but not verified
-  if (!isVerified) {
+  if (!localIsVerified) {
     return (
       <div className="min-h-screen">
         {/* Header */}
@@ -70,7 +58,7 @@ export default function Home() {
               {user?.email?.address || user?.wallet?.address}
             </span>
             <button
-              onClick={handleLogout}
+              onClick={handleLogoutClick}
               className="bg-red-600 text-white px-4 py-2 rounded font-semibold hover:bg-red-700 transition-colors"
             >
               Logout
@@ -80,7 +68,7 @@ export default function Home() {
 
         {/* Verification Content */}
         <div className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)]">
-          <SelfVerification onSuccess={handleVerificationSuccess} />
+          <SelfVerification onSuccess={handleVerificationComplete} />
         </div>
       </div>
     );
@@ -96,7 +84,7 @@ export default function Home() {
             {user?.email?.address || user?.wallet?.address}
           </span>
           <button
-            onClick={handleLogout}
+            onClick={handleLogoutClick}
             className="bg-red-600 text-white px-4 py-2 rounded font-semibold hover:bg-red-700 transition-colors"
           >
             Logout
@@ -112,10 +100,21 @@ export default function Home() {
           <p className="text-sm text-green-400 mb-4">✅ Identity Verified</p>
         </div>
         <div className="flex gap-4">
-          <button className="bg-white text-black px-6 py-2 rounded font-semibold hover:bg-gray-200">
+          <button 
+            onClick={() => alert("Create Campaign feature coming soon!")}
+            className="bg-white text-black px-6 py-2 rounded font-semibold hover:bg-gray-200"
+          >
             Create Campaign
           </button>
-          <button className="bg-white text-black px-6 py-2 rounded font-semibold hover:bg-gray-200">
+          <button 
+            onClick={() => {
+              console.log('=== Fund Campaigns Button Clicked ===');
+              console.log('Current verification status:', localIsVerified);
+              console.log('About to navigate to /campaigns');
+              window.location.href = '/campaigns';
+            }}
+            className="bg-white text-black px-6 py-2 rounded font-semibold hover:bg-gray-200"
+          >
             Fund Campaigns
           </button>
         </div>
