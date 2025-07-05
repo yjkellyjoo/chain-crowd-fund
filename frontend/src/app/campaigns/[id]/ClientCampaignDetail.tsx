@@ -3,62 +3,10 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useWallets } from "@privy-io/react-auth";
+import { useContract } from "../../hooks/useContract";
+import { Campaign, Contribution } from "../../lib/contract";
 import { FundCampaignModal } from "../../components/FundCampaignModal";
 import { useAuthAndVerification } from "../../hooks/useAuthAndVerification";
-
-// Mock campaign data - in real app, this would come from your backend
-const mockCampaigns = [
-  {
-    id: 1,
-    title: "Clean Water Initiative",
-    description: "Providing clean water access to rural communities. This project aims to install water purification systems in 5 villages, serving over 2,000 people. We will work with local communities to ensure sustainable maintenance and operation.",
-    goal: 50000,
-    raised: 32000,
-    creator: "0x1234...5678",
-    creatorName: "WaterCorp Foundation",
-    image: "/api/placeholder/600/400",
-    deadline: "2026-03-15",
-    category: "Environment",
-    backers: 127,
-    updates: [
-      { date: "2024-01-15", title: "Project Started", content: "Initial site survey completed" },
-      { date: "2024-01-10", title: "Funding Milestone", content: "Reached 50% of funding goal!" }
-    ]
-  },
-  {
-    id: 2,
-    title: "Educational Technology Hub",
-    description: "Building a tech education center for underprivileged youth. This center will provide coding bootcamps, digital literacy training, and mentorship programs to help young people develop skills for the modern economy.",
-    goal: 75000,
-    raised: 45000,
-    creator: "0x8765...4321",
-    creatorName: "TechForAll Initiative",
-    image: "/api/placeholder/600/400",
-    deadline: "2024-02-28",
-    category: "Education",
-    backers: 89,
-    updates: [
-      { date: "2024-01-20", title: "Location Secured", content: "Found perfect location in downtown area" }
-    ]
-  },
-  {
-    id: 3,
-    title: "Solar Power Project",
-    description: "Installing solar panels for sustainable energy solutions. This project will install 500 solar panels across 3 communities, providing clean energy to 1,000 households and reducing carbon emissions by 200 tons annually.",
-    goal: 100000,
-    raised: 78000,
-    creator: "0xabcd...efgh",
-    creatorName: "GreenEnergy Solutions",
-    image: "/api/placeholder/600/400",
-    deadline: "2024-04-10",
-    category: "Energy",
-    backers: 203,
-    updates: [
-      { date: "2024-01-25", title: "Permits Approved", content: "All regulatory approvals obtained" },
-      { date: "2024-01-12", title: "Community Meeting", content: "Successful town hall meeting" }
-    ]
-  }
-];
 
 interface ClientCampaignDetailProps {
   params: {
@@ -70,46 +18,80 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
   const router = useRouter();
   const { isReady, isAuthenticated, isVerified, isLoading } = useAuthAndVerification(true);
   const { wallets } = useWallets();
-  const [campaign, setCampaign] = useState<typeof mockCampaigns[0] | null>(null);
+  const { 
+    formatUSDC, 
+    formatDeadline, 
+    isExpired, 
+    getProgressPercentage, 
+    getCampaignContributions
+  } = useContract();
+  
+  const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [contributions, setContributions] = useState<Contribution[]>([]);
   const [campaignLoading, setCampaignLoading] = useState(true);
+  const [contributionsLoading, setContributionsLoading] = useState(true);
   const [showFundModal, setShowFundModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'description' | 'updates' | 'backers'>('description');
+  const [error, setError] = useState<string | null>(null);
 
+  // Fetch campaign data
   useEffect(() => {
-    // Only proceed if authentication is complete
     if (isReady && isAuthenticated && isVerified) {
-      console.log('=== Campaign Detail Page Debug ===');
-      console.log('Loading campaign ID:', params.id);
-      
-      // Find campaign by ID
-      const campaignId = parseInt(params.id);
-      const foundCampaign = mockCampaigns.find(c => c.id === campaignId);
-      
-      console.log('Found campaign:', foundCampaign);
-      setCampaign(foundCampaign || null);
-      setCampaignLoading(false);
+      loadCampaign();
     }
   }, [isReady, isAuthenticated, isVerified, params?.id]);
 
+  // Load contributions when campaign is loaded and backers tab is active
+  useEffect(() => {
+    if (campaign && activeTab === 'backers' && contributionsLoading) {
+      loadContributions();
+    }
+  }, [campaign, activeTab, contributionsLoading]);
+
+  const loadCampaign = async () => {
+    try {
+      setCampaignLoading(true);
+      setError(null);
+      
+      const campaignId = parseInt(params.id);
+      if (isNaN(campaignId)) {
+        throw new Error('Invalid campaign ID');
+      }
+
+      // Import the service dynamically to avoid SSR issues
+      const { chainCrowdFundService } = await import('../../lib/contract');
+      const campaignData = await chainCrowdFundService.getCampaign(campaignId);
+      
+      setCampaign(campaignData);
+    } catch (err) {
+      console.error('Failed to load campaign:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load campaign');
+    } finally {
+      setCampaignLoading(false);
+    }
+  };
+
+  const loadContributions = async () => {
+    if (!campaign) return;
+    
+    try {
+      setContributionsLoading(true);
+      const contributionsData = await getCampaignContributions(campaign.id);
+      setContributions(contributionsData);
+    } catch (err) {
+      console.error('Failed to load contributions:', err);
+      // Don't show error for contributions, just log it
+    } finally {
+      setContributionsLoading(false);
+    }
+  };
+
   // Handle campaign not found after loading is complete
   useEffect(() => {
-    if (!campaignLoading && !campaign) {
-      console.log('Campaign not found, redirecting to /campaigns');
+    if (!campaignLoading && !campaign && !error) {
       router.push("/campaigns");
     }
-  }, [campaign, campaignLoading, router]);
-
-  const getProgressPercentage = (raised: number, goal: number) => {
-    return Math.min((raised / goal) * 100, 100);
-  };
-
-  const getDaysRemaining = (deadline: string) => {
-    const now = new Date();
-    const end = new Date(deadline);
-    const diffTime = end.getTime() - now.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
-  };
+  }, [campaign, campaignLoading, router, error]);
 
   const handleFundClick = () => {
     if (!wallets || wallets.length === 0) {
@@ -117,6 +99,19 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
       return;
     }
     setShowFundModal(true);
+  };
+
+  const handleFundSuccess = () => {
+    setShowFundModal(false);
+    // Reload campaign data after successful funding
+    loadCampaign();
+    if (activeTab === 'backers') {
+      loadContributions();
+    }
+  };
+
+  const shortenAddress = (address: string) => {
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
   if (!isReady || isLoading || campaignLoading) {
@@ -133,6 +128,31 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
   // If not authenticated or verified, the hook will handle redirects
   if (!isAuthenticated || !isVerified) {
     return null;
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <p className="text-xl mb-4 text-red-400">Error: {error}</p>
+          <div className="space-x-4">
+            <button
+              onClick={() => loadCampaign()}
+              className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => router.push("/campaigns")}
+              className="bg-gray-600 text-white px-6 py-2 rounded hover:bg-gray-700"
+            >
+              Back to Campaigns
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!campaign) {
@@ -179,9 +199,14 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
             {/* Campaign Title & Creator */}
             <div>
               <h1 className="text-3xl font-bold mb-2">{campaign.title}</h1>
-              <p className="text-gray-400">
-                by <span className="text-blue-400">{campaign.creatorName}</span>
-              </p>
+              <div className="flex items-center gap-4">
+                <p className="text-gray-400">
+                  by <span className="text-blue-400">{shortenAddress(campaign.creator)}</span>
+                </p>
+                <span className="text-xs bg-blue-600 px-2 py-1 rounded">
+                  {campaign.category}
+                </span>
+              </div>
             </div>
 
             {/* Tabs */}
@@ -219,22 +244,54 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
 
               {activeTab === 'updates' && (
                 <div className="space-y-4">
-                  {campaign.updates.map((update, index) => (
-                    <div key={index} className="border-l-4 border-blue-500 pl-4 py-2">
-                      <h3 className="font-semibold text-white">{update.title}</h3>
-                      <p className="text-sm text-gray-400 mb-2">{update.date}</p>
-                      <p className="text-gray-300">{update.content}</p>
-                    </div>
-                  ))}
+                  <div className="text-center py-8">
+                    <p className="text-gray-400">No updates available yet.</p>
+                    <p className="text-sm text-gray-500 mt-2">Check back later for project updates!</p>
+                  </div>
                 </div>
               )}
 
               {activeTab === 'backers' && (
                 <div className="space-y-4">
-                  <p className="text-gray-300">{campaign.backers} backers supporting this campaign</p>
-                  <div className="text-sm text-gray-400">
-                    Individual backer information would be displayed here in a real application.
-                  </div>
+                  {contributionsLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mr-3"></div>
+                      <span>Loading backers...</span>
+                    </div>
+                  ) : contributions.length > 0 ? (
+                    <div className="space-y-4">
+                      <p className="text-gray-300">{contributions.length} contributions supporting this campaign</p>
+                      <div className="space-y-3">
+                        {contributions.map((contribution, index) => (
+                          <div key={index} className="bg-gray-800 p-4 rounded-lg">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="text-white font-semibold">
+                                  {shortenAddress(contribution.contributor)}
+                                </p>
+                                <p className="text-sm text-gray-400">
+                                  {new Date(Number(contribution.timestamp) * 1000).toLocaleDateString()}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-green-400 font-semibold">
+                                  {formatUSDC(contribution.amount)} USDC
+                                </p>
+                                {contribution.isCrossChain && (
+                                  <p className="text-xs text-blue-400">Cross-chain</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <p className="text-gray-400">No backers yet.</p>
+                      <p className="text-sm text-gray-500 mt-2">Be the first to support this campaign!</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -247,45 +304,62 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
               <div className="space-y-4 mb-6">
                 <div className="flex justify-between items-center">
                   <span className="text-2xl font-bold text-white">
-                    ${campaign.raised.toLocaleString()}
+                    {formatUSDC(campaign.raisedAmount)} USDC
                   </span>
                   <span className="text-sm text-gray-400">
-                    of ${campaign.goal.toLocaleString()} goal
+                    of {formatUSDC(campaign.goalAmount)} USDC goal
                   </span>
                 </div>
                 
                 <div className="w-full bg-gray-700 rounded-full h-3">
                   <div
                     className="bg-blue-500 h-3 rounded-full transition-all duration-300"
-                    style={{ width: `${getProgressPercentage(campaign.raised, campaign.goal)}%` }}
+                    style={{ width: `${getProgressPercentage(campaign.raisedAmount, campaign.goalAmount)}%` }}
                   ></div>
                 </div>
                 
                 <div className="flex justify-between text-sm text-gray-400">
-                  <span>{getProgressPercentage(campaign.raised, campaign.goal).toFixed(1)}% funded</span>
-                  <span>{getDaysRemaining(campaign.deadline)} days to go</span>
+                  <span>{getProgressPercentage(campaign.raisedAmount, campaign.goalAmount).toFixed(1)}% funded</span>
+                  <span className={isExpired(campaign.deadline) ? 'text-red-400' : ''}>
+                    {isExpired(campaign.deadline) ? 'Expired' : formatDeadline(campaign.deadline)}
+                  </span>
                 </div>
               </div>
 
               {/* Stats */}
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="text-center">
-                  <div className="text-xl font-bold text-white">{campaign.backers}</div>
+                  <div className="text-xl font-bold text-white">{contributions.length}</div>
                   <div className="text-sm text-gray-400">Backers</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-xl font-bold text-white">{getDaysRemaining(campaign.deadline)}</div>
-                  <div className="text-sm text-gray-400">Days Left</div>
+                  <div className="text-xl font-bold text-white">
+                    {isExpired(campaign.deadline) ? 'Expired' : formatDeadline(campaign.deadline)}
+                  </div>
+                  <div className="text-sm text-gray-400">
+                    {isExpired(campaign.deadline) ? 'Campaign Ended' : 'Time Left'}
+                  </div>
                 </div>
               </div>
 
               {/* Fund Button */}
-              <button
-                onClick={handleFundClick}
-                className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-colors mb-4"
-              >
-                Fund This Campaign
-              </button>
+              {!campaign.isCompleted && !isExpired(campaign.deadline) && (
+                <button
+                  onClick={handleFundClick}
+                  className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition-colors mb-4"
+                >
+                  Fund This Campaign
+                </button>
+              )}
+
+              {/* Campaign Status */}
+              {(campaign.isCompleted || isExpired(campaign.deadline)) && (
+                <div className="mb-4 p-3 bg-gray-700 rounded-lg text-center">
+                  <p className="text-sm text-gray-300">
+                    {campaign.isCompleted ? 'Campaign Completed' : 'Campaign Expired'}
+                  </p>
+                </div>
+              )}
 
               {/* Campaign Details */}
               <div className="space-y-2 text-sm">
@@ -295,12 +369,18 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">Created by:</span>
-                  <span className="text-white">{campaign.creator}</span>
+                  <span className="text-white">{shortenAddress(campaign.creator)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">Deadline:</span>
                   <span className="text-white">
-                    {new Date(campaign.deadline).toLocaleDateString()}
+                    {formatDeadline(campaign.deadline)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Status:</span>
+                  <span className={`text-white ${campaign.isCompleted ? 'text-green-400' : isExpired(campaign.deadline) ? 'text-red-400' : 'text-blue-400'}`}>
+                    {campaign.isCompleted ? 'Completed' : isExpired(campaign.deadline) ? 'Expired' : 'Active'}
                   </span>
                 </div>
               </div>
@@ -314,10 +394,7 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
         <FundCampaignModal
           campaign={campaign}
           onClose={() => setShowFundModal(false)}
-          onSuccess={() => {
-            setShowFundModal(false);
-            // In a real app, you would refresh the campaign data here
-          }}
+          onSuccess={handleFundSuccess}
         />
       )}
     </div>

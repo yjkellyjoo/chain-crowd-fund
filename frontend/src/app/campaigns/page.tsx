@@ -3,8 +3,8 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthAndVerification } from "../hooks/useAuthAndVerification";
 import { useContract } from "../hooks/useContract";
-import ContributeCampaign from "../components/ContributeCampaign";
 import { Campaign } from "../lib/contract";
+import { FundCampaignModal } from "../components/FundCampaignModal";
 
 export default function CampaignsPage() {
   const router = useRouter();
@@ -216,7 +216,7 @@ export default function CampaignsPage() {
 
       {/* Contribute Modal */}
       {showContributeModal && selectedCampaign && (
-        <ContributeCampaign
+        <FundCampaignModal
           campaign={selectedCampaign}
           onClose={() => {
             setShowContributeModal(false);
