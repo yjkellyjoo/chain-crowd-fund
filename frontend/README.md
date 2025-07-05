@@ -1,20 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ChainCrowdFund Frontend
+
+A decentralized crowdfunding platform built with [Next.js](https://nextjs.org), featuring Privy authentication and Self Protocol identity verification.
+
+## Features
+
+- **Privy Authentication**: Wallet and social login integration
+- **Self Protocol Identity Verification**: Age and compliance verification via QR code
+- **Decentralized Crowdfunding**: Create and fund campaigns with USDC
+- **Circle CCTP Integration**: Cross-chain USDC payments
+- **Modern UI**: Built with Next.js, TypeScript, and Tailwind CSS
+
+## Environment Variables
+
+Create a `.env.local` file in the frontend directory with the following variables:
+
+```bash
+# Site URL for Self Protocol verification
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+
+# Privy App ID - Replace with your actual Privy app ID from https://dashboard.privy.io
+NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id-here
+```
 
 ## Getting Started
 
-First, run the development server:
+1. **Install Dependencies**
+   ```bash
+   yarn install
+   ```
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+2. **Set up Environment Variables**
+   - Create `.env.local` file with the variables shown above
+   - Get your Privy App ID from [Privy Dashboard](https://dashboard.privy.io)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+3. **Run Development Server**
+   ```bash
+   yarn dev
+   ```
+
+4. **Open Application**
+   Navigate to [http://localhost:3000](http://localhost:3000)
+
+## User Flow
+
+1. **Login with Privy** - Users authenticate using wallet or social login
+2. **Self Protocol Verification** - Users scan QR code with Self app for identity verification
+3. **Access Platform** - After verification, users can create or fund campaigns
+
+## Self Protocol Integration
+
+The app uses Self Protocol for identity verification with the following requirements:
+- Minimum age: 18
+- Excluded countries: Iran (IRN), North Korea (PRK)
+- OFAC compliance checks enabled
+- Required disclosures: name, nationality, date of birth
+
+## Tech Stack
+
+- **Frontend**: Next.js 15, TypeScript, Tailwind CSS
+- **Authentication**: Privy
+- **Identity Verification**: Self Protocol
+- **Payments**: Circle CCTP for USDC
+- **Smart Contracts**: Foundry (in `/contract` directory)
+
+## Development
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
@@ -22,12 +71,19 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 ## Learn More
 
-To learn more about Next.js, take a look at the following resources:
+To learn more about the technologies used:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API
+- [Privy Documentation](https://docs.privy.io) - wallet authentication and management
+- [Self Protocol Documentation](https://docs.self.xyz) - identity verification
+- [Circle Documentation](https://developers.circle.com) - USDC and cross-chain transfers
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Next Steps
+
+- Set up campaign creation UI
+- Integrate Circle CCTP for USDC payments
+- Add campaign funding interface
+- Connect to smart contracts
 
 ## Deploy on Vercel
 
