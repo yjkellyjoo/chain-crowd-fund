@@ -1,10 +1,11 @@
 "use client";
 import React, { useState, useEffect, useCallback } from "react";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { usePrivy, useWallets, useFundWallet } from "@privy-io/react-auth";
 import { ethers } from "ethers";
 import { useContract } from "../hooks/useContract";
 import { Campaign } from "../lib/contract";
 import { cctpService, CCTP_V2_CHAINS, CCTPChain, TransferRequest } from "../lib/cctp";
+import { sepolia, arbitrumSepolia, baseSepolia, avalancheFuji } from "viem/chains";
 
 // Types for ethereum provider
 interface EthereumProvider {
@@ -17,9 +18,21 @@ interface FundCampaignModalProps {
   onSuccess: () => void;
 }
 
+// Helper function to get viem chain from CCTP chain ID
+const getViemChainFromCCTPId = (chainId: number) => {
+  switch (chainId) {
+    case 11155111: return sepolia;
+    case 421614: return arbitrumSepolia;
+    case 84532: return baseSepolia;
+    case 43113: return avalancheFuji;
+    default: return sepolia; // fallback
+  }
+};
+
 export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaignModalProps) {
   const { ready } = usePrivy();
   const { wallets } = useWallets();
+  const { fundWallet } = useFundWallet();
   const { 
     contribute, 
     approveUSDC, 
@@ -43,6 +56,7 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
   const [transferStatus, setTransferStatus] = useState("");
   const [txHash, setTxHash] = useState("");
   const [attestationData, setAttestationData] = useState<{message: string, attestation: string} | null>(null);
+  const [fundingAvailable, setFundingAvailable] = useState(true);
   
   // Local contribution state (from ContributeCampaign)
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -177,6 +191,7 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
     }
     if (parseFloat(amount) > parseFloat(usdcBalance)) {
       alert("Insufficient USDC balance");
+      handleOnRamp();
       return;
     }
     
@@ -192,14 +207,45 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
   };
 
   const handleOnRamp = async () => {
+    const wallet = wallets?.[0];
+    if (!wallet) {
+      alert("Please connect your wallet first");
+      return;
+    }
+
     setLoading(true);
     try {
-      setTransferStatus("Initiating on-ramp process...");
-      alert("Please use the Privy on-ramp to get USDC tokens, then try again.");
-      setLoading(false);
+      setTransferStatus("Initiating Privy funding...");
+      
+      // Use Privy's funding support - all methods configured in Dashboard
+      await fundWallet(wallet.address, {
+        chain: fundingMethod === 'crosschain' ? 
+          getViemChainFromCCTPId(selectedChain.id) :
+          getViemChainFromCCTPId(destinationChain.id),
+        asset: 'USDC',
+        // Only specify amount if user has entered one, otherwise let them choose
+        ...(amount && parseFloat(amount) > 0 ? { amount: parseFloat(amount).toFixed(2) } : {})
+      });
+      
+      setTransferStatus("Funding completed! Please check your wallet balance.");
+      
+      // Refresh balance after funding
+      setTimeout(() => {
+        checkUSDCBalance();
+      }, 2000);
+      
     } catch (error) {
-      console.error("On-ramp error:", error);
-      setTransferStatus("On-ramp failed. Please try again.");
+      console.error("Privy funding error:", error);
+      
+      // Check if this is the "not enabled" error
+      if (error instanceof Error && error.message.includes("not enabled")) {
+        setFundingAvailable(false);
+        setTransferStatus("⚠️ Wallet funding not enabled. Please enable all funding methods in your Privy Dashboard.");
+        alert("Wallet funding is not enabled.\n\nTo enable all Privy funding methods:\n1. Go to your Privy Dashboard\n2. Navigate to User management > Account funding\n3. Enable 'Pay with card' (for debit/credit cards, Apple Pay, Google Pay)\n4. Enable 'External wallet transfers' (MetaMask, Phantom, etc.)\n5. Enable 'Exchange transfers' (Coinbase, etc.)\n6. Enable 'Bank transfers' (ACH, wire, SEPA)\n7. Configure your preferred networks, assets, and amounts");
+      } else {
+        setTransferStatus("Funding failed. Please try again.");
+      }
+    } finally {
       setLoading(false);
     }
   };
@@ -459,6 +505,16 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                       {fundingMethod === 'crosschain' && ` on ${selectedChain.name}`}
                     </span>
                   </div>
+                  {fundingMethod === 'crosschain' && !hasUSDC && fundingAvailable && (
+                    <div className="mt-2 text-xs text-blue-300">
+                      💳 Use Privy to purchase USDC: pay with card, Apple Pay, Google Pay, external wallets, exchanges, or bank transfers
+                    </div>
+                  )}
+                  {!fundingAvailable && (
+                    <div className="mt-2 text-xs text-yellow-300">
+                      ⚠️ Wallet funding not enabled. Enable funding methods in Privy Dashboard → User management → Account funding
+                    </div>
+                  )}
                 </div>
 
                 {/* Amount Input */}
@@ -524,13 +580,32 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                 )}
 
                 {/* Action Buttons */}
-                <div className="flex gap-3 pt-4">
+                <div className="flex gap-2 pt-4">
                   <button
                     onClick={onClose}
-                    className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-500 transition-colors"
+                    className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-500 transition-colors"
                     disabled={isSubmitting || loading}
                   >
                     Cancel
+                  </button>
+                  
+                  {/* Privy Funding Button - Always available for topping up */}
+                  <button
+                    onClick={handleOnRamp}
+                    disabled={loading || balanceLoading || !fundingAvailable}
+                    className={`px-4 py-2 text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 ${
+                      fundingAvailable 
+                        ? 'bg-green-600 hover:bg-green-700' 
+                        : 'bg-gray-600'
+                    }`}
+                    title={
+                      !fundingAvailable 
+                        ? 'Wallet funding not enabled in Privy Dashboard - Enable pay with card, external wallets, exchanges, and bank transfers' 
+                        : `Fund with Privy (card, Apple Pay, Google Pay, external wallets, exchanges, banks) on ${fundingMethod === 'crosschain' ? selectedChain.name : destinationChain.name}`
+                    }
+                  >
+                    <span>{fundingAvailable ? '💳' : '⚠️'}</span>
+                    <span>{loading ? 'Funding...' : fundingAvailable ? 'Fund Wallet' : 'Not Enabled'}</span>
                   </button>
                   
                   {fundingMethod === 'local' && needsApproval ? (
@@ -549,7 +624,7 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                     >
                       {isSubmitting || loading ? 'Processing...' : 
                        fundingMethod === 'local' ? 'Contribute' : 
-                       !hasUSDC ? "Get USDC & Fund" : "Fund Campaign"}
+                       'Fund Campaign'}
                     </button>
                   )}
                 </div>
