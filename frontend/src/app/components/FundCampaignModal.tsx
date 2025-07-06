@@ -424,20 +424,20 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
         }
       }
 
-      // Create transfer request
+      // Step 1: Check allowance and approve if needed
+      setTransferStatus("Checking USDC allowance...");
+      const userAddress = await signer.getAddress();
+      
+      // Create transfer request - mint to user's wallet, not contract
       const transferRequest: TransferRequest = {
         amount: amount,
         sourceChain: selectedChain,
         destinationChain: destinationChain,
-        recipient: contractAddress,
+        recipient: userAddress, // Mint to user's wallet, not contract
         fast: selectedChain.fast,
-        destinationCaller: contractAddress,
+        destinationCaller: ethers.ZeroAddress, // Allow any caller
         maxFee: '0.0005'
       };
-
-      // Step 1: Check allowance and approve if needed
-      setTransferStatus("Checking USDC allowance...");
-      const userAddress = await signer.getAddress();
       const currentAllowance = await cctpService.getUSDCAllowance(
         selectedChain.id,
         userAddress,
@@ -581,6 +581,12 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
         return;
       }
 
+      // Set up the signer for CCTP service
+      const provider = await wallet.getEthereumProvider();
+      const ethersProvider = new ethers.BrowserProvider(provider);
+      const signer = await ethersProvider.getSigner();
+      cctpService.setSigner(signer);
+
       // Complete the transfer
       const result = await cctpService.completeTransfer(
         attestationData.message,
@@ -590,8 +596,8 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
 
       if (result.success) {
         setStep('success');
-        setTransferStatus("Cross-chain contribution completed successfully!");
-        onSuccess();
+        setTransferStatus(`Cross-chain transfer completed! ${amount} USDC has been minted to your wallet on ${destinationChain.name}. You can now contribute to the campaign using the Local funding method.`);
+        // Don't call onSuccess() yet since user needs to manually contribute
       } else {
         throw new Error(result.error || 'Failed to complete transfer');
       }
@@ -1021,16 +1027,36 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
-                <h3 className="font-semibold text-white">Success!</h3>
-                <p className="text-sm text-gray-300">
-                  Your cross-chain contribution of {amount} USDC has been completed successfully!
-                </p>
-                <button
-                  onClick={onClose}
-                  className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  Close
-                </button>
+                <h3 className="font-semibold text-white">Cross-Chain Transfer Complete!</h3>
+                <div className="text-sm text-gray-300 space-y-2">
+                  <p>
+                    {amount} USDC has been successfully transferred to your wallet on {destinationChain.name}.
+                  </p>
+                  <div className="p-3 bg-blue-900 rounded-lg">
+                    <p className="text-blue-100 font-medium">Next Step:</p>
+                    <p className="text-blue-200 text-xs mt-1">
+                      Switch to &ldquo;Local&rdquo; funding method to contribute the USDC to this campaign.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setStep('amount');
+                      setFundingMethod('local');
+                      setTransferStatus('');
+                    }}
+                    className="flex-1 bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    Contribute Now
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="flex-1 bg-gray-600 text-white py-3 rounded-lg hover:bg-gray-500 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             )}
 

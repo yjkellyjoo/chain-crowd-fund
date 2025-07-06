@@ -57,8 +57,8 @@ export const CCTP_V2_CHAINS: CCTPChain[] = [
     domain: 0,
     rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
     explorerUrl: "https://sepolia.etherscan.io",
-    tokenMessengerAddress: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5",
-    messageTransmitterAddress: "0x7865fAfC2db2093669d92c0F33AeEF291086BEFD",
+    tokenMessengerAddress: "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA", // CCTP V2 TokenMessenger
+    messageTransmitterAddress: "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275", // CCTP V2 MessageTransmitter
     usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
     fast: true
   },
@@ -69,8 +69,8 @@ export const CCTP_V2_CHAINS: CCTPChain[] = [
     domain: 3,
     rpcUrl: "https://sepolia-rollup.arbitrum.io/rpc",
     explorerUrl: "https://sepolia.arbiscan.io",
-    tokenMessengerAddress: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5",
-    messageTransmitterAddress: "0xaCF1ceeF35caAc005e15888dDb8A3515C41B4872",
+    tokenMessengerAddress: "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA", // CCTP V2 TokenMessenger
+    messageTransmitterAddress: "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275", // CCTP V2 MessageTransmitter
     usdcAddress: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
     fast: true
   },
@@ -81,8 +81,8 @@ export const CCTP_V2_CHAINS: CCTPChain[] = [
     domain: 6,
     rpcUrl: "https://sepolia.base.org",
     explorerUrl: "https://sepolia.basescan.org",
-    tokenMessengerAddress: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5",
-    messageTransmitterAddress: "0x7865fAfC2db2093669d92c0F33AeEF291086BEFD",
+    tokenMessengerAddress: "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA", // CCTP V2 TokenMessenger
+    messageTransmitterAddress: "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275", // CCTP V2 MessageTransmitter
     usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     fast: true
   },
@@ -93,8 +93,8 @@ export const CCTP_V2_CHAINS: CCTPChain[] = [
     domain: 1,
     rpcUrl: "https://api.avax-test.network/ext/bc/C/rpc",
     explorerUrl: "https://testnet.snowtrace.io",
-    tokenMessengerAddress: "0xa9fB1b3009DCb79E2Fe346c16a604B8fa8ae0a79",
-    messageTransmitterAddress: "0xe737E5CebEeBa77EFE34D4aA090756590B1CE275",
+    tokenMessengerAddress: "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA", // CCTP V2 TokenMessenger
+    messageTransmitterAddress: "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275", // CCTP V2 MessageTransmitter
     usdcAddress: "0x5425890298aed601595a70AB815c96711a31Bc65",
     fast: false
   }
@@ -102,8 +102,7 @@ export const CCTP_V2_CHAINS: CCTPChain[] = [
 
 // CCTP V2 Contract ABIs
 const TOKEN_MESSENGER_ABI = [
-  "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold) external returns (uint64)",
-  "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken) external returns (uint64)"
+  "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold) external returns (uint64)"
 ];
 
 const MESSAGE_TRANSMITTER_ABI = [
@@ -211,29 +210,19 @@ export class CCTPService {
         ? ethers.zeroPadValue(request.destinationCaller, 32)
         : ethers.ZeroHash;
 
-      let tx;
+      // Always use CCTP V2 signature
+      const maxFeeWei = ethers.parseUnits(request.maxFee || "0.0005", decimals);
+      const minFinalityThreshold = (request.fast && request.sourceChain.fast) ? 1000 : 2000;
       
-      if (request.fast && request.sourceChain.fast) {
-        // Use CCTP V2 Fast Transfer
-        const maxFeeWei = ethers.parseUnits(request.maxFee || "0.0005", decimals);
-        tx = await tokenMessenger.depositForBurn(
-          amountWei,
-          request.destinationChain.domain,
-          recipientBytes32,
-          request.sourceChain.usdcAddress,
-          destinationCallerBytes32,
-          maxFeeWei,
-          1000 // minFinalityThreshold (1000 or less for Fast Transfer)
-        );
-      } else {
-        // Standard Transfer
-        tx = await tokenMessenger.depositForBurn(
-          amountWei,
-          request.destinationChain.domain,
-          recipientBytes32,
-          request.sourceChain.usdcAddress
-        );
-      }
+      const tx = await tokenMessenger.depositForBurn(
+        amountWei,
+        request.destinationChain.domain,
+        recipientBytes32,
+        request.sourceChain.usdcAddress,
+        destinationCallerBytes32,
+        maxFeeWei,
+        minFinalityThreshold
+      );
 
       await tx.wait();
       
@@ -344,13 +333,105 @@ export class CCTPService {
         this.signer
       );
 
-      const tx = await messageTransmitter.receiveMessage(message, attestation);
-      await tx.wait();
+      // Ensure message and attestation are properly formatted as bytes
+      const messageBytes = message.startsWith('0x') ? message : `0x${message}`;
+      const attestationBytes = attestation.startsWith('0x') ? attestation : `0x${attestation}`;
+
+      console.log("🔄 Calling receiveMessage with:");
+      console.log("Message length:", messageBytes.length);
+      console.log("Attestation length:", attestationBytes.length);
+      console.log("MessageTransmitter address:", destinationChain.messageTransmitterAddress);
+      console.log("Message (first 100 chars):", messageBytes.substring(0, 100) + "...");
+      console.log("Attestation (first 100 chars):", attestationBytes.substring(0, 100) + "...");
       
-      return {
-        txHash: tx.hash,
-        success: true
-      };
+      // Check current network and wallet state
+      const currentNetwork = await this.signer.provider?.getNetwork();
+      const walletAddress = await this.signer.getAddress();
+      const balance = await this.signer.provider?.getBalance(walletAddress);
+      
+      console.log("🔍 Network and wallet info:");
+      console.log("Current network ID:", currentNetwork?.chainId.toString());
+      console.log("Expected network ID:", destinationChainId);
+      console.log("Wallet address:", walletAddress);
+      console.log("ETH balance:", balance ? ethers.formatEther(balance) : "unknown");
+      
+      // Validate we're on the right network
+      if (currentNetwork && Number(currentNetwork.chainId) !== destinationChainId) {
+        throw new Error(`Wrong network! Currently on chain ${currentNetwork.chainId}, but need to be on ${destinationChainId}`);
+      }
+      
+      // Basic validation of message and attestation format
+      if (messageBytes.length < 10) {
+        throw new Error("Message appears to be too short or invalid");
+      }
+      if (attestationBytes.length < 10) {
+        throw new Error("Attestation appears to be too short or invalid");
+      }
+      
+      // Test if we can interact with the MessageTransmitter contract
+      try {
+        // Try to get the contract's version (a simple read-only call)
+        const code = await this.signer.provider?.getCode(destinationChain.messageTransmitterAddress);
+        if (!code || code === '0x') {
+          throw new Error(`MessageTransmitter contract not found at address ${destinationChain.messageTransmitterAddress} on chain ${destinationChainId}`);
+        }
+        console.log("✅ MessageTransmitter contract exists and is accessible");
+      } catch (contractError) {
+        console.error("❌ Contract validation failed:", contractError);
+        throw new Error(`Cannot access MessageTransmitter contract: ${contractError instanceof Error ? contractError.message : 'Unknown error'}`);
+      }
+
+      // First, let's try to call receiveMessage directly
+      // If it fails, we'll provide a more helpful error message
+      try {
+        const tx = await messageTransmitter.receiveMessage(messageBytes, attestationBytes);
+        const receipt = await tx.wait();
+        
+        console.log("✅ Message received successfully:", receipt.hash);
+        
+        return {
+          txHash: receipt.hash,
+          success: true
+        };
+      } catch (receiveError) {
+        console.error("❌ receiveMessage failed:", receiveError);
+        
+                 // For "missing revert data" errors, we need to investigate further
+         if (receiveError instanceof Error) {
+           const errorMessage = receiveError.message.toLowerCase();
+           
+           if (errorMessage.includes("missing revert data")) {
+             // This usually means the transaction would revert for a specific reason
+             // Let's try to get more information
+             console.log("🔍 Got 'missing revert data' - investigating further...");
+             
+             // Common causes for CCTP V2:
+             // 1. Message already used (most common)
+             // 2. Message expired
+             // 3. Invalid attestation
+             // 4. Wrong network
+             
+             throw new Error("Transaction would fail. This usually means:\n• The message has already been used (CCTP messages can only be used once)\n• The message has expired\n• You're on the wrong network\n• The attestation is invalid\n\nTry starting a fresh cross-chain transfer.");
+           } else if (errorMessage.includes("message already used") || 
+               errorMessage.includes("nonce") || 
+               errorMessage.includes("already received")) {
+             throw new Error("This message has already been used. Each cross-chain transfer can only be completed once.");
+           } else if (errorMessage.includes("invalid attestation") || 
+                      errorMessage.includes("invalid signature")) {
+             throw new Error("Invalid attestation data. The attestation may be corrupted or from the wrong network.");
+           } else if (errorMessage.includes("invalid message") || 
+                      errorMessage.includes("malformed")) {
+             throw new Error("Invalid message format. The message data may be corrupted.");
+           } else if (errorMessage.includes("expired")) {
+             throw new Error("This attestation has expired. Please request a new attestation.");
+           } else if (errorMessage.includes("insufficient funds")) {
+             throw new Error("Insufficient funds for gas fees on the destination chain.");
+           }
+         }
+         
+         // If none of the specific cases match, throw the original error for debugging
+         throw receiveError;
+      }
     } catch (error) {
       console.error("Mint USDC error:", error);
       return {
