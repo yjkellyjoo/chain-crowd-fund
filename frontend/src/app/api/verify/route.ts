@@ -67,6 +67,19 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Check excluded countries manually
+      // Note: The Self SDK handles this internally, but we can add additional checks if needed
+      const excludedCountries = ['IRN', 'PRK'];
+      if (userContextData && userContextData.nationality) {
+        const userNationality = userContextData.nationality.toUpperCase();
+        if (excludedCountries.includes(userNationality)) {
+          return NextResponse.json(
+            { error: 'Geographic restriction - service not available in your country' },
+            { status: 403 }
+          );
+        }
+      }
+
     // Return successful verification response
       return NextResponse.json({
         status: 'success',
