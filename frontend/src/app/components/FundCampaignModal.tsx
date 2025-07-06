@@ -809,17 +809,16 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                       <span className="text-white font-semibold">
                         {balanceLoading ? 'Loading...' : `${usdcBalance} USDC`}
                         {fundingMethod === 'crosschain' && ` on ${selectedChain.name}`}
+                        {fundingMethod === 'local' && ` on ${network.name}`}
                       </span>
-                      {fundingMethod === 'crosschain' && (
-                        <button
-                          onClick={() => checkUSDCBalance(true)}
-                          disabled={balanceLoading}
-                          className="text-blue-400 hover:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Refresh balance"
-                        >
-                          🔄
-                        </button>
-                      )}
+                      <button
+                        onClick={() => checkUSDCBalance(true)}
+                        disabled={balanceLoading}
+                        className="text-blue-400 hover:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Refresh balance"
+                      >
+                        🔄
+                      </button>
                     </div>
                   </div>
                   {fundingMethod === 'crosschain' && !hasUSDC && fundingAvailable && (
