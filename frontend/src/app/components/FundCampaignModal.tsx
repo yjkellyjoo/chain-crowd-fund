@@ -7,11 +7,6 @@ import { Campaign } from "../lib/contract";
 import { cctpService, CCTP_V2_CHAINS, CCTPChain, TransferRequest } from "../lib/cctp";
 import { sepolia, arbitrumSepolia, baseSepolia, avalancheFuji } from "viem/chains";
 
-// Types for ethereum provider
-interface EthereumProvider {
-  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
-}
-
 interface FundCampaignModalProps {
   campaign: Campaign;
   onClose: () => void;
@@ -39,15 +34,18 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
     userBalance, 
     userAllowance, 
     error: contractError,
-    formatUSDC,
     isExpired,
-    network
+    network,
+    formatUSDC,
+    getProgressPercentage
   } = useContract();
 
   // State for both cross-chain and local contributions
   const [amount, setAmount] = useState("");
   const [fundingMethod, setFundingMethod] = useState<'local' | 'crosschain'>('local');
-  const [selectedChain, setSelectedChain] = useState<CCTPChain>(CCTP_V2_CHAINS[0]);
+  const [selectedChain, setSelectedChain] = useState<CCTPChain>(
+    CCTP_V2_CHAINS.find(chain => chain.id === 84532) || CCTP_V2_CHAINS[0] // Default to Base Sepolia
+  );
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<'amount' | 'processing' | 'attestation' | 'complete' | 'success'>('amount');
   const [hasUSDC, setHasUSDC] = useState(false);
@@ -62,6 +60,11 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [needsApproval, setNeedsApproval] = useState(false);
   const [approvalStep, setApprovalStep] = useState(false);
+  const [resumeTxHash, setResumeTxHash] = useState("");
+  
+  // Balance cache to avoid repeated calls
+  const [balanceCache, setBalanceCache] = useState<Map<string, {balance: string, timestamp: number}>>(new Map());
+  const [lastBalanceCheck, setLastBalanceCheck] = useState<number>(0);
 
   // Destination chain - where the crowdfunding contract is deployed
   const destinationChain = CCTP_V2_CHAINS.find(chain => chain.id === network.chainId) || CCTP_V2_CHAINS[0];
@@ -78,31 +81,64 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
     }
   }, [amount, userAllowance, fundingMethod]);
 
-  const checkUSDCBalance = useCallback(async () => {
-    const getEthereumWallet = () => {
+  const checkUSDCBalance = useCallback(async (forceRefresh: boolean = false) => {
+    const getEmbeddedWallet = () => {
       if (!wallets || wallets.length === 0) return null;
-      return wallets[0];
+      return wallets.find(wallet => wallet.walletClientType === 'privy');
     };
 
-    const wallet = getEthereumWallet();
+    const wallet = getEmbeddedWallet();
     if (!wallet) {
       console.log("No Ethereum wallet found");
       return;
     }
+
+    // Debounce: Only check once every 10 seconds unless forced
+    const now = Date.now();
+    if (!forceRefresh && (now - lastBalanceCheck < 10000)) {
+      console.log("⏳ Balance check skipped - too soon since last check");
+      return;
+    }
     
     setBalanceLoading(true);
+    setLastBalanceCheck(now);
+    
     try {
       if (fundingMethod === 'local') {
         // For local contributions, use the contract's balance check
         setUsdcBalance(parseFloat(userBalance).toFixed(2));
         setHasUSDC(parseFloat(userBalance) > 0);
       } else {
-        // For cross-chain, use CCTP balance check
-        console.log(`Checking USDC balance for wallet: ${wallet.address} on ${selectedChain.name}`);
-        const balance = await cctpService.getUSDCBalance(selectedChain.id, wallet.address);
-        console.log(`USDC Balance: ${balance} USDC`);
-        setUsdcBalance(parseFloat(balance).toFixed(2));
-        setHasUSDC(parseFloat(balance) > 0);
+        // For cross-chain, use CCTP balance check with caching
+        const cacheKey = `${selectedChain.id}-${wallet.address}`;
+        const cached = balanceCache.get(cacheKey);
+        
+        // Use cache if it's less than 30 seconds old and not forced refresh
+        if (!forceRefresh && cached && (now - cached.timestamp < 30000)) {
+          console.log(`💾 Using cached balance for ${selectedChain.name}: ${cached.balance} USDC`);
+          setUsdcBalance(parseFloat(cached.balance).toFixed(2));
+          setHasUSDC(parseFloat(cached.balance) > 0);
+          setBalanceLoading(false);
+          return;
+        }
+
+        console.log(`🔍 Fetching USDC balance for wallet: ${wallet.address} on ${selectedChain.name}`);
+        try {
+          const balance = await cctpService.getUSDCBalance(selectedChain.id, wallet.address);
+          console.log(`💰 USDC Balance: ${balance} USDC`);
+          
+          // Update cache
+          const newCache = new Map(balanceCache);
+          newCache.set(cacheKey, { balance, timestamp: now });
+          setBalanceCache(newCache);
+          
+          setUsdcBalance(parseFloat(balance).toFixed(2));
+          setHasUSDC(parseFloat(balance) > 0);
+        } catch (balanceError) {
+          console.error(`❌ Failed to get balance for ${selectedChain.name}:`, balanceError);
+          setUsdcBalance("0");
+          setHasUSDC(false);
+        }
       }
     } catch (error) {
       console.error("Error checking USDC balance:", error);
@@ -111,13 +147,27 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
     } finally {
       setBalanceLoading(false);
     }
-  }, [selectedChain, wallets, fundingMethod, userBalance]);
+  }, [selectedChain, wallets, fundingMethod, userBalance, balanceCache, lastBalanceCheck]);
+
+  // Track selectedChain changes
+  useEffect(() => {
+    console.log("🎯 selectedChain state updated to:", selectedChain.name, "ID:", selectedChain.id);
+  }, [selectedChain]);
+
+  // Log initial setup
+  useEffect(() => {
+    console.log("🚀 FundCampaignModal initialized");
+    console.log("🚀 Initial selectedChain:", selectedChain.name, "ID:", selectedChain.id);
+    console.log("🚀 Available CCTP chains:", CCTP_V2_CHAINS.map(c => `${c.name} (${c.id})`));
+  }, []);
 
   useEffect(() => {
     if (ready && wallets && wallets.length > 0) {
+      // Only check balance when switching between local/crosschain or changing chains
       checkUSDCBalance();
     }
-  }, [ready, wallets, selectedChain, checkUSDCBalance, fundingMethod]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, wallets, selectedChain, fundingMethod]); // Removed checkUSDCBalance to prevent loops
 
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -229,9 +279,9 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
       
       setTransferStatus("Funding completed! Please check your wallet balance.");
       
-      // Refresh balance after funding
+      // Refresh balance after funding (force refresh)
       setTimeout(() => {
-        checkUSDCBalance();
+        checkUSDCBalance(true);
       }, 2000);
       
     } catch (error) {
@@ -250,10 +300,90 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
     }
   };
 
+  const handleResumeTransfer = async () => {
+    if (!resumeTxHash) {
+      alert("Please enter a transaction hash");
+      return;
+    }
+
+    setLoading(true);
+    setStep('processing');
+    setTxHash(resumeTxHash);
+    setTransferStatus("Checking attestation status...");
+    
+    try {
+      // Get attestation from Circle
+      let attempts = 0;
+      const maxAttempts = 60;
+      const sourceChain = selectedChain;
+
+      const attestationUrl = `https://iris-api-sandbox.circle.com/v2/messages/${sourceChain.domain}?transactionHash=${resumeTxHash}`;
+      
+      while (attempts < maxAttempts) {
+        try {
+          const response = await fetch(attestationUrl);
+          
+          if (response.status === 404) {
+            attempts++;
+            const timeLeft = Math.ceil((maxAttempts - attempts) * 5 / 60);
+            setTransferStatus(`Waiting for attestation from Circle... (${attempts}/${maxAttempts}, ~${timeLeft}min remaining)`);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            continue;
+          }
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const data = await response.json();
+          
+          if (data.messages && data.messages.length > 0) {
+            const message = data.messages[0];
+            if (message.status === 'complete') {
+              setAttestationData({
+                message: message.message,
+                attestation: message.attestation
+              });
+              setStep('attestation');
+              setTransferStatus("Attestation received! Ready to complete transfer.");
+              return;
+            }
+          }
+          
+          attempts++;
+          const timeLeft = Math.ceil((maxAttempts - attempts) * 5 / 60);
+          setTransferStatus(`Waiting for attestation from Circle... (${attempts}/${maxAttempts}, ~${timeLeft}min remaining)`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+        } catch (error) {
+          console.error("Attestation check error:", error);
+          attempts++;
+          const timeLeft = Math.ceil((maxAttempts - attempts) * 5 / 60);
+          setTransferStatus(`Waiting for attestation from Circle... (${attempts}/${maxAttempts}, ~${timeLeft}min remaining)`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      }
+      
+      throw new Error('Attestation timeout - Please try again later or check Circle\'s status');
+
+    } catch (error) {
+      console.error("Resume transfer error:", error);
+      setTransferStatus(error instanceof Error ? error.message : "Transfer failed");
+      setStep('amount');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleCrossChainFunding = async () => {
-    const wallet = wallets?.[0];
+    const getEmbeddedWallet = () => {
+      if (!wallets || wallets.length === 0) return null;
+      return wallets.find(wallet => wallet.walletClientType === 'privy');
+    };
+
+    const wallet = getEmbeddedWallet();
     if (!wallet) {
-      alert("Please connect your wallet first");
+      alert("Please connect your Privy wallet first");
       return;
     }
 
@@ -261,33 +391,24 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
     setStep('processing');
     
     try {
-      // Set up the signer
-      if (!window.ethereum) {
-        throw new Error("No ethereum provider found");
-      }
-      const provider = new ethers.BrowserProvider(window.ethereum as unknown as EthereumProvider);
-      const signer = await provider.getSigner();
+      // Set up the signer using Privy's embedded wallet
+      const provider = await wallet.getEthereumProvider();
+      const ethersProvider = new ethers.BrowserProvider(provider);
+      const signer = await ethersProvider.getSigner();
       cctpService.setSigner(signer);
 
       // Check if we need to switch networks
-      const currentNetwork = await provider.getNetwork();
+      const currentNetwork = await ethersProvider.getNetwork();
       if (currentNetwork.chainId !== BigInt(selectedChain.id)) {
         setTransferStatus("Please switch to the source chain in your wallet...");
         try {
-          await (window.ethereum as unknown as EthereumProvider).request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: `0x${selectedChain.id.toString(16)}` }],
-          });
+          await wallet.switchChain(selectedChain.id);
         } catch (switchError: unknown) {
-          if (switchError && typeof switchError === 'object' && 'code' in switchError && switchError.code === 4902) {
-            setTransferStatus("Please add the source chain to your wallet");
-            return;
-          }
-          throw switchError;
+          console.error("Failed to switch chain:", switchError);
+          setTransferStatus("Please manually switch to the source chain in your wallet");
+          return;
         }
       }
-
-      setTransferStatus("Initiating cross-chain transfer...");
 
       // Create transfer request
       const transferRequest: TransferRequest = {
@@ -300,28 +421,93 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
         maxFee: '0.0005'
       };
 
-      // Execute the cross-chain transfer
-      const result = await cctpService.crossChainTransfer(transferRequest);
+      // Step 1: Check allowance and approve if needed
+      setTransferStatus("Checking USDC allowance...");
+      const userAddress = await signer.getAddress();
+      const currentAllowance = await cctpService.getUSDCAllowance(
+        selectedChain.id,
+        userAddress,
+        selectedChain.tokenMessengerAddress
+      );
+
+      if (parseFloat(currentAllowance) < parseFloat(amount)) {
+        setTransferStatus("Approving USDC spending...");
+        await cctpService.approveUSDC(selectedChain.id, amount);
+      }
+
+      // Step 2: Burn USDC on source chain
+      setTransferStatus("Burning USDC on source chain...");
+      const burnResult = await cctpService.burnUSDC(transferRequest);
+      if (!burnResult.success) {
+        throw new Error(burnResult.error || "Burn failed");
+      }
+
+      setTxHash(burnResult.txHash);
+      setTransferStatus("USDC burned successfully! Getting attestation from Circle...");
+
+      // Step 3: Get attestation from Circle with progress updates
+      let attempts = 0;
+      const maxAttempts = 60; // 5 minutes max wait
+      const sourceChain = selectedChain;
+
+      const attestationUrl = `https://iris-api-sandbox.circle.com/v2/messages/${sourceChain.domain}?transactionHash=${burnResult.txHash}`;
       
-      if (!result.success) {
-        throw new Error(result.error || 'Transfer failed');
+      while (attempts < maxAttempts) {
+        try {
+          const response = await fetch(attestationUrl);
+          
+          if (response.status === 404) {
+            attempts++;
+            const timeLeft = Math.ceil((maxAttempts - attempts) * 5 / 60);
+            setTransferStatus(`Waiting for attestation from Circle... (${attempts}/${maxAttempts}, ~${timeLeft}min remaining)`);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            continue;
+          }
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const data = await response.json();
+          
+          if (data.messages && data.messages.length > 0) {
+            const message = data.messages[0];
+            if (message.status === 'complete') {
+              setAttestationData({
+                message: message.message,
+                attestation: message.attestation
+              });
+              setStep('attestation');
+              setTransferStatus("Attestation received! Ready to complete transfer.");
+              return;
+            }
+          }
+          
+          attempts++;
+          const timeLeft = Math.ceil((maxAttempts - attempts) * 5 / 60);
+          setTransferStatus(`Waiting for attestation from Circle... (${attempts}/${maxAttempts}, ~${timeLeft}min remaining)`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+        } catch (error) {
+          console.error("Attestation check error:", error);
+          attempts++;
+          const timeLeft = Math.ceil((maxAttempts - attempts) * 5 / 60);
+          setTransferStatus(`Waiting for attestation from Circle... (${attempts}/${maxAttempts}, ~${timeLeft}min remaining)`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
       }
-
-      setTxHash(result.txHash);
-      setTransferStatus("Transfer initiated! Waiting for attestation...");
-
-      // Store attestation data
-      if (result.attestation && result.messageHash) {
-        setAttestationData({
-          message: result.messageHash,
-          attestation: result.attestation
-        });
-        setStep('attestation');
-        setTransferStatus("Attestation received! Ready to complete transfer.");
-      }
+      
+      throw new Error('Attestation timeout - Please try again later or check Circle\'s status');
 
     } catch (error) {
       console.error("Cross-chain transfer error:", error);
+      console.error("Transfer details:", {
+        amount,
+        sourceChain: selectedChain.name,
+        destinationChain: destinationChain.name,
+        contractAddress,
+        txHash: txHash || "None"
+      });
       setTransferStatus(error instanceof Error ? error.message : "Transfer failed");
       setStep('amount');
     } finally {
@@ -335,19 +521,30 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
       return;
     }
 
+    const getEmbeddedWallet = () => {
+      if (!wallets || wallets.length === 0) return null;
+      return wallets.find(wallet => wallet.walletClientType === 'privy');
+    };
+
+    const wallet = getEmbeddedWallet();
+    if (!wallet) {
+      setTransferStatus("Please connect your Privy wallet first");
+      return;
+    }
+
     setLoading(true);
     setStep('complete');
     setTransferStatus("Completing transfer on destination chain...");
 
     try {
       // Switch to destination chain
-      if (!window.ethereum) {
-        throw new Error("No ethereum provider found");
+      try {
+        await wallet.switchChain(destinationChain.id);
+      } catch (switchError: unknown) {
+        console.error("Failed to switch to destination chain:", switchError);
+        setTransferStatus("Please manually switch to the destination chain in your wallet");
+        return;
       }
-      await (window.ethereum as unknown as EthereumProvider).request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: `0x${destinationChain.id.toString(16)}` }],
-      });
 
       // Complete the transfer
       const result = await cctpService.completeTransfer(
@@ -374,8 +571,8 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
 
   const goalAmountFormatted = formatUSDC(campaign.goalAmount);
   const raisedAmountFormatted = formatUSDC(campaign.raisedAmount);
-  const remainingAmount = formatUSDC(campaign.goalAmount - campaign.raisedAmount);
-  const isExpiredCampaign = isExpired(campaign.deadline);
+  const remainingAmount = formatUSDC((campaign.goalAmount - campaign.raisedAmount).toString());
+  const isExpiredCampaign = isExpired(Number(campaign.deadline));
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -408,7 +605,7 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
             </div>
             <div className="flex justify-between">
               <span>Progress:</span>
-              <span>{((Number(campaign.raisedAmount) / Number(campaign.goalAmount)) * 100).toFixed(1)}%</span>
+              <span>{getProgressPercentage(campaign.raisedAmount, campaign.goalAmount).toFixed(1)}%</span>
             </div>
             {isExpiredCampaign && (
               <div className="text-red-400 font-semibold">⚠️ Campaign Expired</div>
@@ -469,8 +666,18 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                       <select
                         value={selectedChain.id}
                         onChange={(e) => {
-                          const chain = CCTP_V2_CHAINS.find(c => c.id === parseInt(e.target.value));
-                          if (chain) setSelectedChain(chain);
+                          console.log("🔄 Dropdown changed - selected value:", e.target.value);
+                          console.log("🔄 Current selectedChain before update:", selectedChain.name);
+                          const chainId = parseInt(e.target.value);
+                          console.log("🔄 Parsed chain ID:", chainId);
+                          const chain = CCTP_V2_CHAINS.find(c => c.id === chainId);
+                          console.log("🔄 Found chain:", chain?.name || "Not found");
+                          if (chain) {
+                            setSelectedChain(chain);
+                            console.log("✅ Updated selectedChain to:", chain.name);
+                          } else {
+                            console.error("❌ Chain not found for ID:", chainId);
+                          }
                         }}
                         className="w-full p-3 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
@@ -493,17 +700,53 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                         className="w-full p-3 bg-gray-700 border border-gray-600 rounded-md text-gray-400"
                       />
                     </div>
+
+                    {/* Resume Transfer for Cross-Chain */}
+                    <div className="p-3 bg-blue-900 rounded">
+                      <div className="text-sm text-blue-100 mb-2">
+                        Resume previous transfer?
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={resumeTxHash}
+                          onChange={(e) => setResumeTxHash(e.target.value)}
+                          placeholder="Enter transaction hash..."
+                          className="flex-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          disabled={isSubmitting || loading}
+                        />
+                        <button
+                          onClick={handleResumeTransfer}
+                          disabled={!resumeTxHash || isSubmitting || loading}
+                          className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Resume
+                        </button>
+                      </div>
+                    </div>
                   </>
                 )}
 
                 {/* User Balance */}
                 <div className="p-3 bg-gray-700 rounded">
-                  <div className="flex justify-between text-sm">
+                  <div className="flex justify-between items-center text-sm">
                     <span className="text-gray-300">Your USDC Balance:</span>
-                    <span className="text-white font-semibold">
-                      {balanceLoading ? 'Loading...' : `${usdcBalance} USDC`}
-                      {fundingMethod === 'crosschain' && ` on ${selectedChain.name}`}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-semibold">
+                        {balanceLoading ? 'Loading...' : `${usdcBalance} USDC`}
+                        {fundingMethod === 'crosschain' && ` on ${selectedChain.name}`}
+                      </span>
+                      {fundingMethod === 'crosschain' && (
+                        <button
+                          onClick={() => checkUSDCBalance(true)}
+                          disabled={balanceLoading}
+                          className="text-blue-400 hover:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Refresh balance"
+                        >
+                          🔄
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {fundingMethod === 'crosschain' && !hasUSDC && fundingAvailable && (
                     <div className="mt-2 text-xs text-blue-300">
@@ -649,6 +892,23 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
                     >
                       View on Explorer
                     </a>
+                  </div>
+                )}
+                {transferStatus.includes('Waiting for attestation') && (
+                  <div className="mt-4">
+                    <button
+                      onClick={() => {
+                        setStep('amount');
+                        setLoading(false);
+                        setTransferStatus('');
+                      }}
+                      className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-500 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <p className="text-xs text-gray-400 mt-2">
+                      Note: Your USDC has been burned. You can come back later to complete the transfer.
+                    </p>
                   </div>
                 )}
               </div>

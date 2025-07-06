@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { chainCrowdFundService, Campaign, Contribution, ARBITRUM_SEPOLIA } from '../lib/contract';
+import { chainCrowdFundService, Campaign, ARBITRUM_SEPOLIA } from '../lib/contract';
 
 interface ContractState {
   isLoading: boolean;
@@ -12,7 +12,7 @@ interface ContractState {
 }
 
 export function useContract() {
-  const { authenticated, user } = usePrivy();
+  const { authenticated } = usePrivy();
   const { wallets } = useWallets();
   const [state, setState] = useState<ContractState>({
     isLoading: false,
@@ -22,15 +22,18 @@ export function useContract() {
     userAllowance: '0'
   });
 
+  // Get embedded Privy wallet specifically
+  const getEmbeddedWallet = useCallback(() => {
+    return wallets.find(wallet => wallet.walletClientType === 'privy');
+  }, [wallets]);
+
   // Debug logging
   React.useEffect(() => {
     console.log('=== useContract Debug ===');
     console.log('authenticated:', authenticated);
-    console.log('user:', user);
-    console.log('user?.wallet?.address:', user?.wallet?.address);
     console.log('wallets:', wallets);
-    console.log('wallets[0]?.address:', wallets[0]?.address);
-  }, [authenticated, user, wallets]);
+    console.log('embedded wallet:', getEmbeddedWallet());
+  }, [authenticated, wallets, getEmbeddedWallet]);
 
   // Get signer for write operations
   const getSigner = useCallback(async () => {
@@ -38,27 +41,27 @@ export function useContract() {
       throw new Error('Please log in first');
     }
     
-    // Check if wallet is connected using wallets array
-    if (wallets.length === 0 || !wallets[0]?.address) {
-      throw new Error('Please connect your wallet first. Try refreshing the page and logging in again.');
+    // Check if embedded wallet is available
+    const embeddedWallet = getEmbeddedWallet();
+    if (!embeddedWallet?.address) {
+      throw new Error('Embedded wallet not ready. Please try refreshing the page and logging in again.');
     }
     
-    const wallet = wallets[0];
-    const provider = await wallet.getEthereumProvider();
+    const provider = await embeddedWallet.getEthereumProvider();
     const ethersProvider = new ethers.BrowserProvider(provider);
     
     // Check network and switch if needed
     const network = await ethersProvider.getNetwork();
     if (Number(network.chainId) !== ARBITRUM_SEPOLIA.chainId) {
       try {
-        await wallet.switchChain(ARBITRUM_SEPOLIA.chainId);
+        await embeddedWallet.switchChain(ARBITRUM_SEPOLIA.chainId);
       } catch {
         throw new Error(`Please switch to ${ARBITRUM_SEPOLIA.name} network`);
       }
     }
     
     return ethersProvider.getSigner();
-  }, [authenticated, wallets]);
+  }, [authenticated, getEmbeddedWallet]);
 
   // Load campaigns
   const loadCampaigns = useCallback(async () => {
@@ -78,9 +81,10 @@ export function useContract() {
 
   // Load user's USDC balance and allowance
   const loadUserBalance = useCallback(async () => {
-    if (!authenticated || wallets.length === 0 || !wallets[0]?.address) return;
+    const embeddedWallet = getEmbeddedWallet();
+    if (!authenticated || !embeddedWallet?.address) return;
     
-    const walletAddress = wallets[0].address;
+    const walletAddress = embeddedWallet.address;
     try {
       const [balance, allowance] = await Promise.all([
         chainCrowdFundService.getUSDCBalance(walletAddress),
@@ -91,9 +95,22 @@ export function useContract() {
     } catch (error) {
       console.error('Failed to load user balance:', error);
     }
-  }, [authenticated, wallets]);
+  }, [authenticated, getEmbeddedWallet]);
 
-  // Create a new campaign
+  // Load campaigns on mount
+  useEffect(() => {
+    loadCampaigns();
+  }, [loadCampaigns]);
+
+  // Load user balance when embedded wallet is available
+  useEffect(() => {
+    const embeddedWallet = getEmbeddedWallet();
+    if (authenticated && embeddedWallet?.address) {
+      loadUserBalance();
+    }
+  }, [authenticated, getEmbeddedWallet, loadUserBalance]);
+
+  // Create campaign
   const createCampaign = useCallback(async (
     title: string,
     description: string,
@@ -105,13 +122,16 @@ export function useContract() {
     try {
       const signer = await getSigner();
       chainCrowdFundService.setSigner(signer);
-      
-      const txHash = await chainCrowdFundService.createCampaign(title, description, goalAmount, duration, category);
-      
-      // Reload campaigns after creation
-      await loadCampaigns();
+      const txHash = await chainCrowdFundService.createCampaign(
+        title,
+        description,
+        goalAmount,
+        duration,
+        category
+      );
       
       setState(prev => ({ ...prev, isLoading: false }));
+      await loadCampaigns(); // Refresh campaigns list
       return txHash;
     } catch (error) {
       console.error('Failed to create campaign:', error);
@@ -130,13 +150,10 @@ export function useContract() {
     try {
       const signer = await getSigner();
       chainCrowdFundService.setSigner(signer);
-      
       const txHash = await chainCrowdFundService.approveUSDC(amount);
       
-      // Reload user balance after approval
-      await loadUserBalance();
-      
       setState(prev => ({ ...prev, isLoading: false }));
+      await loadUserBalance(); // Refresh balance
       return txHash;
     } catch (error) {
       console.error('Failed to approve USDC:', error);
@@ -149,19 +166,16 @@ export function useContract() {
     }
   }, [getSigner, loadUserBalance]);
 
-  // Contribute to a campaign
+  // Contribute to campaign
   const contribute = useCallback(async (campaignId: number, amount: string) => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
       const signer = await getSigner();
       chainCrowdFundService.setSigner(signer);
-      
       const txHash = await chainCrowdFundService.contribute(campaignId, amount);
       
-      // Reload campaigns and user balance after contribution
-      await Promise.all([loadCampaigns(), loadUserBalance()]);
-      
       setState(prev => ({ ...prev, isLoading: false }));
+      await Promise.all([loadCampaigns(), loadUserBalance()]); // Refresh data
       return txHash;
     } catch (error) {
       console.error('Failed to contribute:', error);
@@ -174,29 +188,26 @@ export function useContract() {
     }
   }, [getSigner, loadCampaigns, loadUserBalance]);
 
-  // Get campaign contributions (read-only, no signer needed)
-  const getCampaignContributions = useCallback(async (campaignId: number): Promise<Contribution[]> => {
+  // Get campaign contributions
+  const getCampaignContributions = useCallback(async (campaignId: number) => {
     try {
       return await chainCrowdFundService.getCampaignContributions(campaignId);
     } catch (error) {
-      console.error('Failed to get campaign contributions:', error);
-      throw error;
+      console.error('Failed to get contributions:', error);
+      return [];
     }
   }, []);
 
-  // Submit results (for campaign creators)
+  // Submit campaign results
   const submitResults = useCallback(async (campaignId: number) => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
       const signer = await getSigner();
       chainCrowdFundService.setSigner(signer);
-      
       const txHash = await chainCrowdFundService.submitResults(campaignId);
       
-      // Reload campaigns after submitting results
-      await loadCampaigns();
-      
       setState(prev => ({ ...prev, isLoading: false }));
+      await loadCampaigns(); // Refresh campaigns
       return txHash;
     } catch (error) {
       console.error('Failed to submit results:', error);
@@ -209,19 +220,16 @@ export function useContract() {
     }
   }, [getSigner, loadCampaigns]);
 
-  // Release funds (for campaign creators)
+  // Release funds
   const releaseFunds = useCallback(async (campaignId: number) => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
       const signer = await getSigner();
       chainCrowdFundService.setSigner(signer);
-      
       const txHash = await chainCrowdFundService.releaseFunds(campaignId);
       
-      // Reload campaigns after releasing funds
-      await loadCampaigns();
-      
       setState(prev => ({ ...prev, isLoading: false }));
+      await loadCampaigns(); // Refresh campaigns
       return txHash;
     } catch (error) {
       console.error('Failed to release funds:', error);
@@ -234,19 +242,16 @@ export function useContract() {
     }
   }, [getSigner, loadCampaigns]);
 
-  // Request refund (for contributors)
+  // Request refund
   const requestRefund = useCallback(async (campaignId: number) => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
       const signer = await getSigner();
       chainCrowdFundService.setSigner(signer);
-      
       const txHash = await chainCrowdFundService.refund(campaignId);
       
-      // Reload campaigns and user balance after refund
-      await Promise.all([loadCampaigns(), loadUserBalance()]);
-      
       setState(prev => ({ ...prev, isLoading: false }));
+      await Promise.all([loadCampaigns(), loadUserBalance()]); // Refresh data
       return txHash;
     } catch (error) {
       console.error('Failed to request refund:', error);
@@ -260,40 +265,44 @@ export function useContract() {
   }, [getSigner, loadCampaigns, loadUserBalance]);
 
   // Utility functions
-  const formatUSDC = useCallback((amount: bigint) => {
-    return chainCrowdFundService.formatUSDC(amount);
-  }, []);
+  const formatUSDC = (amount: string | bigint) => {
+    // Convert blockchain amounts (6 decimals) to human readable format
+    const amountStr = typeof amount === 'bigint' ? amount.toString() : amount;
+    const formatted = ethers.formatUnits(amountStr, 6); // USDC has 6 decimals
+    const num = parseFloat(formatted);
+    return num.toLocaleString('en-US', { 
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  };
 
-  const formatDeadline = useCallback((timestamp: bigint) => {
-    return chainCrowdFundService.formatDeadline(timestamp);
-  }, []);
+  const formatDeadline = (timestamp: number | bigint) => {
+    const timestampNum = typeof timestamp === 'bigint' ? Number(timestamp) : timestamp;
+    return new Date(timestampNum * 1000).toLocaleDateString();
+  };
 
-  const isExpired = useCallback((deadline: bigint) => {
-    return chainCrowdFundService.isExpired(deadline);
-  }, []);
+  const isExpired = (deadline: number | bigint) => {
+    const deadlineNum = typeof deadline === 'bigint' ? Number(deadline) : deadline;
+    return Math.floor(Date.now() / 1000) > deadlineNum;
+  };
 
-  const getProgressPercentage = useCallback((raised: bigint, goal: bigint) => {
-    return chainCrowdFundService.getProgressPercentage(raised, goal);
-  }, []);
-
-  // Load initial data (read-only operations work without wallet)
-  useEffect(() => {
-    loadCampaigns();
-  }, [loadCampaigns]);
-
-  // Load user balance when authenticated
-  useEffect(() => {
-    if (authenticated && user?.wallet?.address) {
-      loadUserBalance();
-    }
-  }, [authenticated, user, loadUserBalance]);
+  const getProgressPercentage = (raised: string | bigint, goal: string | bigint) => {
+    // Convert blockchain amounts (6 decimals) to human readable format
+    const raisedStr = typeof raised === 'bigint' ? raised.toString() : raised;
+    const goalStr = typeof goal === 'bigint' ? goal.toString() : goal;
+    const raisedFormatted = ethers.formatUnits(raisedStr, 6); // USDC has 6 decimals
+    const goalFormatted = ethers.formatUnits(goalStr, 6);
+    const raisedNum = parseFloat(raisedFormatted);
+    const goalNum = parseFloat(goalFormatted);
+    return goalNum > 0 ? Math.min((raisedNum / goalNum) * 100, 100) : 0;
+  };
 
   return {
     // State
     ...state,
     
-    // Wallet connection state - use wallets array instead of user.wallet
-    isWalletConnected: authenticated && wallets.length > 0 && wallets[0]?.address,
+    // Wallet connection state - always use embedded wallet
+    isWalletConnected: authenticated && !!getEmbeddedWallet()?.address,
     
     // Actions
     createCampaign,

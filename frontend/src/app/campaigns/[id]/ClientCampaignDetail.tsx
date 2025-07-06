@@ -33,53 +33,116 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
   const [showFundModal, setShowFundModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'description' | 'updates' | 'backers'>('description');
   const [error, setError] = useState<string | null>(null);
+  
+  // Cache and debouncing state
+  const [campaignCache, setCampaignCache] = useState<Map<string, {campaign: Campaign, timestamp: number}>>(new Map());
+  const [contributionsCache, setContributionsCache] = useState<Map<string, {contributions: Contribution[], timestamp: number}>>(new Map());
+  const [lastCampaignLoad, setLastCampaignLoad] = useState<number>(0);
+  const [lastContributionsLoad, setLastContributionsLoad] = useState<number>(0);
 
   // Fetch campaign data
   useEffect(() => {
     if (isReady && isAuthenticated && isVerified) {
       loadCampaign();
     }
-  }, [isReady, isAuthenticated, isVerified, params?.id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady, isAuthenticated, isVerified, params?.id]); // Remove loadCampaign to prevent loops
 
   // Load contributions when campaign is loaded and backers tab is active
   useEffect(() => {
     if (campaign && activeTab === 'backers' && contributionsLoading) {
       loadContributions();
     }
-  }, [campaign, activeTab, contributionsLoading]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign, activeTab, contributionsLoading]); // Remove loadContributions to prevent loops
 
-  const loadCampaign = async () => {
+  const loadCampaign = async (forceRefresh: boolean = false) => {
     try {
-      setCampaignLoading(true);
-      setError(null);
-      
       const campaignId = parseInt(params.id);
       if (isNaN(campaignId)) {
         throw new Error('Invalid campaign ID');
       }
 
+      // Debounce: Only load once every 30 seconds unless forced
+      const now = Date.now();
+      const cacheKey = `campaign-${campaignId}`;
+      
+      if (!forceRefresh && (now - lastCampaignLoad < 30000)) {
+        console.log("⏳ Campaign load skipped - too soon since last load");
+        return;
+      }
+
+      // Check cache first (5 minutes)
+      const cached = campaignCache.get(cacheKey);
+      if (!forceRefresh && cached && (now - cached.timestamp < 300000)) {
+        console.log(`💾 Using cached campaign data for ID: ${campaignId}`);
+        setCampaign(cached.campaign);
+        setCampaignLoading(false);
+        return;
+      }
+
+      setCampaignLoading(true);
+      setError(null);
+      setLastCampaignLoad(now);
+      
+      console.log(`🔍 Fetching campaign data for ID: ${campaignId}`);
+
       // Import the service dynamically to avoid SSR issues
       const { chainCrowdFundService } = await import('../../lib/contract');
       const campaignData = await chainCrowdFundService.getCampaign(campaignId);
       
+      // Update cache
+      const newCache = new Map(campaignCache);
+      newCache.set(cacheKey, { campaign: campaignData, timestamp: now });
+      setCampaignCache(newCache);
+      
       setCampaign(campaignData);
+      console.log(`✅ Campaign loaded successfully: ${campaignData.title}`);
     } catch (err) {
-      console.error('Failed to load campaign:', err);
+      console.error('❌ Failed to load campaign:', err);
       setError(err instanceof Error ? err.message : 'Failed to load campaign');
     } finally {
       setCampaignLoading(false);
     }
   };
 
-  const loadContributions = async () => {
+  const loadContributions = async (forceRefresh: boolean = false) => {
     if (!campaign) return;
     
     try {
+      // Debounce: Only load once every 30 seconds unless forced
+      const now = Date.now();
+      const cacheKey = `contributions-${campaign.id}`;
+      
+      if (!forceRefresh && (now - lastContributionsLoad < 30000)) {
+        console.log("⏳ Contributions load skipped - too soon since last load");
+        return;
+      }
+
+      // Check cache first (2 minutes for contributions)
+      const cached = contributionsCache.get(cacheKey);
+      if (!forceRefresh && cached && (now - cached.timestamp < 120000)) {
+        console.log(`💾 Using cached contributions data for campaign: ${campaign.id}`);
+        setContributions(cached.contributions);
+        setContributionsLoading(false);
+        return;
+      }
+
       setContributionsLoading(true);
+      setLastContributionsLoad(now);
+      
+      console.log(`🔍 Fetching contributions for campaign: ${campaign.id}`);
       const contributionsData = await getCampaignContributions(campaign.id);
+      
+      // Update cache
+      const newCache = new Map(contributionsCache);
+      newCache.set(cacheKey, { contributions: contributionsData, timestamp: now });
+      setContributionsCache(newCache);
+      
       setContributions(contributionsData);
+      console.log(`✅ Loaded ${contributionsData.length} contributions`);
     } catch (err) {
-      console.error('Failed to load contributions:', err);
+      console.error('❌ Failed to load contributions:', err);
       // Don't show error for contributions, just log it
     } finally {
       setContributionsLoading(false);
@@ -103,10 +166,10 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
 
   const handleFundSuccess = () => {
     setShowFundModal(false);
-    // Reload campaign data after successful funding
-    loadCampaign();
+    // Force reload campaign data after successful funding
+    loadCampaign(true);
     if (activeTab === 'backers') {
-      loadContributions();
+      loadContributions(true);
     }
   };
 
@@ -138,7 +201,7 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
           <p className="text-xl mb-4 text-red-400">Error: {error}</p>
           <div className="space-x-4">
             <button
-              onClick={() => loadCampaign()}
+              onClick={() => loadCampaign(true)}
               className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
             >
               Try Again
@@ -175,14 +238,25 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
     <div className="min-h-screen bg-gray-900 text-white">
       {/* Header */}
       <div className="border-b border-gray-800 px-6 py-4">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => router.push("/campaigns")}
+              className="text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              ← Back to Campaigns
+            </button>
+            <h1 className="text-2xl font-bold">Campaign Details</h1>
+          </div>
           <button
-            onClick={() => router.push("/campaigns")}
-            className="text-blue-400 hover:text-blue-300 transition-colors"
+            onClick={() => loadCampaign(true)}
+            disabled={campaignLoading}
+            className="text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            title="Refresh campaign data"
           >
-            ← Back to Campaigns
+            <span className={campaignLoading ? 'animate-spin' : ''}>🔄</span>
+            <span className="text-sm">Refresh</span>
           </button>
-          <h1 className="text-2xl font-bold">Campaign Details</h1>
         </div>
       </div>
 
@@ -260,7 +334,18 @@ export default function ClientCampaignDetail({ params }: ClientCampaignDetailPro
                     </div>
                   ) : contributions.length > 0 ? (
                     <div className="space-y-4">
-                      <p className="text-gray-300">{contributions.length} contributions supporting this campaign</p>
+                      <div className="flex items-center justify-between">
+                        <p className="text-gray-300">{contributions.length} contributions supporting this campaign</p>
+                        <button
+                          onClick={() => loadContributions(true)}
+                          disabled={contributionsLoading}
+                          className="text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          title="Refresh contributions"
+                        >
+                          <span className={contributionsLoading ? 'animate-spin' : ''}>🔄</span>
+                          <span className="text-sm">Refresh</span>
+                        </button>
+                      </div>
                       <div className="space-y-3">
                         {contributions.map((contribution, index) => (
                           <div key={index} className="bg-gray-800 p-4 rounded-lg">

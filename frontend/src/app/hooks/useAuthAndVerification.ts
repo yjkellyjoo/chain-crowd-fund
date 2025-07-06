@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy, useUser, User, useWallets } from '@privy-io/react-auth';
 
@@ -19,11 +19,18 @@ export function useAuthAndVerification(redirectOnFail: boolean = true): AuthStat
   const [isVerified, setIsVerified] = useState(false);
   const [isLoadingVerification, setIsLoadingVerification] = useState(true);
 
+  // Get embedded Privy wallet specifically
+  const getEmbeddedWallet = useCallback(() => {
+    return wallets.find(wallet => wallet.walletClientType === 'privy');
+  }, [wallets]);
+
   useEffect(() => {
     console.log('=== Auth & Verification Hook Debug ===');
     console.log('ready:', ready);
     console.log('authenticated:', authenticated);
     console.log('user:', user);
+    console.log('wallets:', wallets);
+    console.log('embedded wallet:', getEmbeddedWallet());
     
     // Wait for Privy to be ready
     if (!ready) {
@@ -45,7 +52,8 @@ export function useAuthAndVerification(redirectOnFail: boolean = true): AuthStat
 
     // Check Self verification
     if (user) {
-      const userIdentifier = wallets[0]?.address || user?.email?.address;
+      const embeddedWallet = getEmbeddedWallet();
+      const userIdentifier = embeddedWallet?.address || user?.email?.address;
       const verificationKey = `verified_${userIdentifier}`;
       console.log('verificationKey:', verificationKey);
       const stored = localStorage.getItem(verificationKey);
@@ -71,7 +79,7 @@ export function useAuthAndVerification(redirectOnFail: boolean = true): AuthStat
     
     setIsLoadingVerification(false);
     console.log('✅ Auth check completed');
-  }, [ready, authenticated, user, wallets, router, redirectOnFail]);
+  }, [ready, authenticated, user, getEmbeddedWallet, router, redirectOnFail]);
 
   return {
     isReady: ready,

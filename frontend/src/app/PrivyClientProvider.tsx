@@ -6,17 +6,19 @@ export default function PrivyClientProvider({ children }: { children: React.Reac
     <PrivyProvider 
       appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID!}
       config={{
-        // Encourage wallet connection during login
-        loginMethods: ['wallet', 'email', 'sms'],
-        // Prioritize wallet connection
+        // Prioritize email and SMS login methods which will trigger embedded wallet creation
+        loginMethods: ['email', 'sms'],
+        // Configure appearance
         appearance: {
           theme: 'dark',
           accentColor: '#3b82f6',
+          showWalletLoginFirst: false,
         },
-        // Automatically prompt for wallet connection after login
+        // Enable automatic embedded wallet creation
         embeddedWallets: {
-          createOnLogin: 'all-users',
+          createOnLogin: 'users-without-wallets',
         },
+        // Remove external wallet configuration - we're using embedded wallets now
       }}
     >
       {children}

@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
+import { useWallets } from '@privy-io/react-auth';
 import { cctpService, CCTPChain, CCTP_V2_CHAINS, TransferRequest } from '../lib/cctp';
 
 interface EthereumProvider {
@@ -26,6 +27,7 @@ export default function CrossChainContribution({
   contractAddress,
   onContributionSuccess
 }: Omit<CrossChainContributionProps, 'campaignId'>) {
+  const { wallets } = useWallets();
   const [selectedSourceChain, setSelectedSourceChain] = useState<CCTPChain | null>(null);
   const [selectedDestinationChain, setSelectedDestinationChain] = useState<CCTPChain | null>(null);
   const [amount, setAmount] = useState('');
@@ -36,6 +38,11 @@ export default function CrossChainContribution({
   const [currentStep, setCurrentStep] = useState<number>(0);
   const [txHash, setTxHash] = useState<string>('');
   const [attestationData, setAttestationData] = useState<{message: string, attestation: string} | null>(null);
+
+  // Get embedded Privy wallet specifically
+  const getEmbeddedWallet = useCallback(() => {
+    return wallets.find(wallet => wallet.walletClientType === 'privy');
+  }, [wallets]);
 
   // Transfer steps
   const steps = [
@@ -58,6 +65,15 @@ export default function CrossChainContribution({
   }, []);
 
   useEffect(() => {
+    // Auto-connect embedded wallet if available
+    const embeddedWallet = getEmbeddedWallet();
+    if (embeddedWallet && embeddedWallet.address) {
+      setUserAddress(embeddedWallet.address);
+      setCurrentStep(1);
+    }
+  }, [getEmbeddedWallet]);
+
+  useEffect(() => {
     if (userAddress) {
       loadBalances();
     }
@@ -65,18 +81,19 @@ export default function CrossChainContribution({
 
   const connectWallet = async () => {
     try {
-      if (typeof window.ethereum !== 'undefined') {
-        const provider = new ethers.BrowserProvider(window.ethereum as unknown as EthereumProvider);
-        await provider.send('eth_requestAccounts', []);
-        const signer = await provider.getSigner();
-        const address = await signer.getAddress();
-        
-        setUserAddress(address);
-        cctpService.setSigner(signer);
-        setCurrentStep(1);
-      } else {
-        throw new Error('MetaMask not found');
+      const embeddedWallet = getEmbeddedWallet();
+      if (!embeddedWallet) {
+        throw new Error('Embedded wallet not found');
       }
+      
+      const provider = await embeddedWallet.getEthereumProvider();
+      const ethersProvider = new ethers.BrowserProvider(provider);
+      const signer = await ethersProvider.getSigner();
+      const address = await signer.getAddress();
+      
+      setUserAddress(address);
+      cctpService.setSigner(signer);
+      setCurrentStep(1);
     } catch (error) {
       console.error('Failed to connect wallet:', error);
       setTransferStatus('Failed to connect wallet');
@@ -124,21 +141,21 @@ export default function CrossChainContribution({
 
     try {
       // Step 1: Check if we need to switch networks
-      const provider = new ethers.BrowserProvider(window.ethereum as unknown as EthereumProvider);
-      const currentNetwork = await provider.getNetwork();
+      const embeddedWallet = getEmbeddedWallet();
+      if (!embeddedWallet) {
+        throw new Error('Embedded wallet not found');
+      }
+      
+      const provider = await embeddedWallet.getEthereumProvider();
+      const ethersProvider = new ethers.BrowserProvider(provider);
+      const currentNetwork = await ethersProvider.getNetwork();
       
       if (currentNetwork.chainId !== BigInt(selectedSourceChain.id)) {
-        setTransferStatus('Please switch to the source chain in your wallet');
+        setTransferStatus('Switching to source chain...');
         try {
-          await (window.ethereum as unknown as EthereumProvider).request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: `0x${selectedSourceChain.id.toString(16)}` }],
-          });
+          await embeddedWallet.switchChain(selectedSourceChain.id);
         } catch (switchError: unknown) {
-          if (switchError && typeof switchError === 'object' && 'code' in switchError && switchError.code === 4902) {
-            setTransferStatus('Please add the source chain to your wallet');
-            return;
-          }
+          setTransferStatus('Failed to switch to source chain');
           throw switchError;
         }
       }

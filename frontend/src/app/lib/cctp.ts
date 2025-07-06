@@ -55,7 +55,7 @@ export const CCTP_V2_CHAINS: CCTPChain[] = [
     name: "Ethereum Sepolia",
     symbol: "ETH",
     domain: 0,
-    rpcUrl: "https://rpc.sepolia.org",
+    rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
     explorerUrl: "https://sepolia.etherscan.io",
     tokenMessengerAddress: "0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5",
     messageTransmitterAddress: "0x7865fAfC2db2093669d92c0F33AeEF291086BEFD",
@@ -123,10 +123,27 @@ export class CCTPService {
   private signer?: ethers.Signer;
 
   constructor() {
-    // Initialize providers for each supported chain
-    CCTP_V2_CHAINS.forEach(chain => {
-      this.providers.set(chain.id, new ethers.JsonRpcProvider(chain.rpcUrl));
-    });
+    // Providers will be initialized lazily when needed
+  }
+
+  private getProvider(chainId: number): ethers.JsonRpcProvider {
+    if (!this.providers.has(chainId)) {
+      const chain = this.getChainById(chainId);
+      if (!chain) throw new Error(`Unsupported chain: ${chainId}`);
+      
+      console.log(`🔗 Initializing provider for ${chain.name} (${chainId}) - RPC: ${chain.rpcUrl}`);
+      
+      try {
+        const provider = new ethers.JsonRpcProvider(chain.rpcUrl);
+        this.providers.set(chainId, provider);
+        console.log(`✅ Provider initialized successfully for ${chain.name}`);
+      } catch (error) {
+        console.error(`❌ Failed to initialize provider for ${chain.name}:`, error);
+        throw new Error(`Failed to connect to ${chain.name}`);
+      }
+    }
+    
+    return this.providers.get(chainId)!;
   }
 
   setSigner(signer: ethers.Signer) {
@@ -141,9 +158,7 @@ export class CCTPService {
     const chain = this.getChainById(chainId);
     if (!chain) throw new Error(`Unsupported chain: ${chainId}`);
 
-    const provider = this.providers.get(chainId);
-    if (!provider) throw new Error(`No provider for chain: ${chainId}`);
-
+    const provider = this.getProvider(chainId);
     const usdcContract = new ethers.Contract(chain.usdcAddress, USDC_ABI, provider);
     const balance = await usdcContract.balanceOf(address);
     const decimals = await usdcContract.decimals();
@@ -155,9 +170,7 @@ export class CCTPService {
     const chain = this.getChainById(chainId);
     if (!chain) throw new Error(`Unsupported chain: ${chainId}`);
 
-    const provider = this.providers.get(chainId);
-    if (!provider) throw new Error(`No provider for chain: ${chainId}`);
-
+    const provider = this.getProvider(chainId);
     const usdcContract = new ethers.Contract(chain.usdcAddress, USDC_ABI, provider);
     const allowance = await usdcContract.allowance(owner, spender);
     const decimals = await usdcContract.decimals();
@@ -239,9 +252,7 @@ export class CCTPService {
   }
 
   async extractMessageFromTx(txHash: string, sourceChainId: number): Promise<string> {
-    const provider = this.providers.get(sourceChainId);
-    if (!provider) throw new Error(`No provider for chain: ${sourceChainId}`);
-
+    const provider = this.getProvider(sourceChainId);
     const receipt = await provider.getTransactionReceipt(txHash);
     if (!receipt) throw new Error("Transaction not found");
 

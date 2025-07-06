@@ -8,7 +8,7 @@ import { FundCampaignModal } from "../components/FundCampaignModal";
 
 export default function CampaignsPage() {
   const router = useRouter();
-  const { isReady, isAuthenticated, isVerified, isLoading } = useAuthAndVerification(true);
+  const { isReady, isAuthenticated, isVerified, isLoading } = useAuthAndVerification(false);
   const { 
     campaigns, 
     isLoading: contractLoading, 
