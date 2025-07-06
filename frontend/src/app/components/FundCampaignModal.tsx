@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { usePrivy, useWallets, useFundWallet } from "@privy-io/react-auth";
 import { ethers } from "ethers";
 import { useContract } from "../hooks/useContract";
-import { Campaign } from "../lib/contract";
+import { Campaign, CHAINCROWDFUND_CONTRACT_ADDRESS } from "../lib/contract";
 import { cctpService, CCTP_V2_CHAINS, CCTPChain, TransferRequest } from "../lib/cctp";
 import { sepolia, arbitrumSepolia, baseSepolia, avalancheFuji } from "viem/chains";
 
@@ -68,7 +68,15 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
 
   // Destination chain - where the crowdfunding contract is deployed
   const destinationChain = CCTP_V2_CHAINS.find(chain => chain.id === network.chainId) || CCTP_V2_CHAINS[0];
-  const contractAddress = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0x1234567890123456789012345678901234567890";
+  const contractAddress = CHAINCROWDFUND_CONTRACT_ADDRESS;
+  
+  // Check if contract address is properly configured
+  const isContractAddressValid = contractAddress && contractAddress.length === 42;
+  if (!isContractAddressValid) {
+    console.error("❌ Contract address not configured properly!");
+    console.error("Please set NEXT_PUBLIC_CONTRACT_ADDRESS in your .env.local file");
+    console.error("Current value:", contractAddress || "undefined");
+  }
 
   // Check if approval is needed when amount changes (for local contributions)
   useEffect(() => {
@@ -376,6 +384,12 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
   };
 
   const handleCrossChainFunding = async () => {
+    // Check if contract address is valid before proceeding
+    if (!isContractAddressValid) {
+      alert("❌ Contract address not configured!\n\nPlease:\n1. Create frontend/.env.local file\n2. Add: NEXT_PUBLIC_CONTRACT_ADDRESS=your_deployed_contract_address\n3. Restart the development server");
+      return;
+    }
+
     const getEmbeddedWallet = () => {
       if (!wallets || wallets.length === 0) return null;
       return wallets.find(wallet => wallet.walletClientType === 'privy');
@@ -508,7 +522,21 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
         contractAddress,
         txHash: txHash || "None"
       });
-      setTransferStatus(error instanceof Error ? error.message : "Transfer failed");
+      
+      let errorMessage = "Transfer failed";
+      if (error instanceof Error) {
+        if (error.message.includes("missing revert data") || error.message.includes("CALL_EXCEPTION")) {
+          errorMessage = "❌ Contract call failed. Please check:\n• Contract address is correct\n• Contract is deployed on destination chain\n• You have sufficient gas";
+        } else if (error.message.includes("insufficient funds")) {
+          errorMessage = "❌ Insufficient funds for gas fees";
+        } else if (error.message.includes("user rejected")) {
+          errorMessage = "❌ Transaction rejected by user";
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
+      setTransferStatus(errorMessage);
       setStep('amount');
     } finally {
       setLoading(false);
@@ -518,6 +546,13 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
   const completeTransfer = async () => {
     if (!attestationData) {
       setTransferStatus("Missing attestation data");
+      return;
+    }
+
+    // Check if contract address is valid before proceeding
+    if (!isContractAddressValid) {
+      setTransferStatus("❌ Contract address not configured properly!");
+      alert("❌ Contract address not configured!\n\nPlease:\n1. Create frontend/.env.local file\n2. Add: NEXT_PUBLIC_CONTRACT_ADDRESS=your_deployed_contract_address\n3. Restart the development server");
       return;
     }
 
@@ -562,7 +597,26 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
       }
     } catch (error) {
       console.error("Failed to complete transfer:", error);
-      setTransferStatus(error instanceof Error ? error.message : "Failed to complete transfer");
+      console.error("Complete transfer details:", {
+        contractAddress,
+        destinationChain: destinationChain.name,
+        attestationData: attestationData ? "Present" : "Missing"
+      });
+      
+      let errorMessage = "Failed to complete transfer";
+      if (error instanceof Error) {
+        if (error.message.includes("missing revert data") || error.message.includes("CALL_EXCEPTION")) {
+          errorMessage = "❌ Contract call failed during completion. Please check:\n• Contract address is correct and deployed\n• Contract has the expected receiveMessage function\n• Attestation data is valid\n• You have sufficient gas on destination chain";
+        } else if (error.message.includes("insufficient funds")) {
+          errorMessage = "❌ Insufficient funds for gas fees on destination chain";
+        } else if (error.message.includes("user rejected")) {
+          errorMessage = "❌ Transaction rejected by user";
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
+      setTransferStatus(errorMessage);
       setStep('attestation');
     } finally {
       setLoading(false);
@@ -612,6 +666,20 @@ export function FundCampaignModal({ campaign, onClose, onSuccess }: FundCampaign
             )}
           </div>
         </div>
+
+        {/* Contract Address Warning */}
+        {!isContractAddressValid && (
+          <div className="mb-4 p-3 bg-red-900 border border-red-700 rounded-lg">
+            <div className="text-red-200 text-sm">
+              <div className="font-semibold mb-1">⚠️ Configuration Error</div>
+              <div className="mb-2">Contract address not configured properly!</div>
+              <div className="text-xs text-red-300">
+                Please create <code>frontend/.env.local</code> and add:<br/>
+                <code>NEXT_PUBLIC_CONTRACT_ADDRESS=your_deployed_contract_address</code>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isExpiredCampaign ? (
           <div className="text-center">
